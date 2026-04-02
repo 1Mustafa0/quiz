@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
-import { LogIn, LogOut, LayoutDashboard, PlusCircle, Library, Home as HomeIcon, AlertCircle, Shield, History, User } from 'lucide-react';
+import { LogIn, LogOut, LayoutDashboard, PlusCircle, Library, Home as HomeIcon, AlertCircle, Shield, History, User, Brain } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -44,10 +44,10 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 onClick={() => handleNavClick('/')}
                 className="flex items-center space-x-2 cursor-pointer group"
               >
-                <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center group-hover:bg-indigo-700 transition-colors">
-                  <span className="text-white font-bold text-xl">Q</span>
+                <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center group-hover:bg-indigo-700 transition-all shadow-sm group-hover:shadow-md">
+                  <Brain className="text-white w-6 h-6" />
                 </div>
-                <span className="text-xl font-bold text-gray-900">AI Quiz Master</span>
+                <span className="text-xl font-bold text-gray-900 tracking-tight">AI Quiz Master</span>
               </div>
               <div className="hidden sm:ml-8 sm:flex sm:space-x-4">
                 {navItems.map((item) => {
