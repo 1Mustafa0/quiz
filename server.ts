@@ -26,7 +26,7 @@ async function startServer() {
 
   // Health check route
   app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', message: 'Server is running' });
+    res.json({ status: 'ok', message: 'Server is running', env: process.env.NODE_ENV });
   });
 
   // API Routes
@@ -170,14 +170,22 @@ async function startServer() {
   });
 
   // Vite middleware for development
-  if (process.env.NODE_ENV !== 'production') {
+  const isProduction = process.env.NODE_ENV === 'production';
+  const distPath = path.join(process.cwd(), 'dist');
+  const hasDist = require('fs').existsSync(distPath);
+
+  console.log(`Server starting in ${isProduction ? 'production' : 'development'} mode`);
+  console.log(`Dist directory exists: ${hasDist}`);
+
+  if (!isProduction || !hasDist) {
+    console.log('Using Vite middleware for serving assets');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    console.log('Serving static assets from dist directory');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
