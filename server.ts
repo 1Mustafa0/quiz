@@ -1,6 +1,7 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { createRequire } from 'module';
@@ -23,6 +24,14 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(express.json());
+
+  // Request logging middleware
+  app.use((req, res, next) => {
+    if (!req.url.startsWith('/@') && !req.url.includes('node_modules')) {
+      console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    }
+    next();
+  });
 
   // Health check route
   app.get('/api/health', (req, res) => {
@@ -172,7 +181,7 @@ async function startServer() {
   // Vite middleware for development
   const isProduction = process.env.NODE_ENV === 'production';
   const distPath = path.join(process.cwd(), 'dist');
-  const hasDist = require('fs').existsSync(distPath);
+  const hasDist = fs.existsSync(distPath);
 
   console.log(`Server starting in ${isProduction ? 'production' : 'development'} mode`);
   console.log(`Dist directory exists: ${hasDist}`);
@@ -181,9 +190,23 @@ async function startServer() {
     console.log('Using Vite middleware for serving assets');
     const vite = await createViteServer({
       server: { middlewareMode: true },
-      appType: 'spa',
+      appType: 'custom',
+      root: process.cwd(),
+      base: '/',
     });
     app.use(vite.middlewares);
+
+    app.get('*', async (req, res, next) => {
+      const url = req.originalUrl;
+      try {
+        let template = await fs.promises.readFile(path.resolve(__dirname, 'index.html'), 'utf-8');
+        template = await vite.transformIndexHtml(url, template);
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
+      } catch (e: any) {
+        vite.ssrFixStacktrace(e);
+        next(e);
+      }
+    });
   } else {
     console.log('Serving static assets from dist directory');
     app.use(express.static(distPath));
