@@ -181,34 +181,9 @@ async function startServer() {
     console.log('Using Vite middleware for serving assets');
     const vite = await createViteServer({
       server: { middlewareMode: true },
-      appType: 'custom',
-      root: __dirname,
-      configFile: path.resolve(__dirname, 'vite.config.ts'),
+      appType: 'spa',
     });
     app.use(vite.middlewares);
-
-    // Explicitly serve index.html through Vite to ensure it's transformed
-    app.get('*', async (req, res, next) => {
-      const url = req.originalUrl;
-      console.log(`Catch-all hit for: ${url}`);
-      // Skip API routes and files with extensions (which should be handled by vite.middlewares)
-      if (url.startsWith('/api') || url.includes('.')) {
-        console.log(`Skipping catch-all for: ${url}`);
-        return next();
-      }
-      
-      try {
-        console.log(`Serving index.html for: ${url}`);
-        const fs = await import('fs');
-        let template = await fs.promises.readFile(path.resolve(__dirname, 'index.html'), 'utf-8');
-        template = await vite.transformIndexHtml(url, template);
-        res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
-      } catch (e: any) {
-        console.error(`Error serving index.html for ${url}:`, e);
-        vite.ssrFixStacktrace(e);
-        next(e);
-      }
-    });
   } else {
     console.log('Serving static assets from dist directory');
     app.use(express.static(distPath));
