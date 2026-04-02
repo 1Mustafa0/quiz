@@ -23,6 +23,21 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  // Vite middleware for development
+  const isProduction = process.env.NODE_ENV === 'production';
+  const distPath = path.join(process.cwd(), 'dist');
+  const hasDist = fs.existsSync(distPath);
+
+  let vite: any;
+  if (!isProduction || !hasDist) {
+    console.log('Using Vite middleware for serving assets');
+    vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  }
+
   app.use(express.json());
 
   // Request logging middleware
@@ -178,21 +193,9 @@ async function startServer() {
     res.status(500).json({ error: 'Internal Server Error', details: err.message });
   });
 
-  // Vite middleware for development
-  const isProduction = process.env.NODE_ENV === 'production';
-  const distPath = path.join(process.cwd(), 'dist');
-  const hasDist = fs.existsSync(distPath);
-
   console.log(`Server starting in ${isProduction ? 'production' : 'development'} mode`);
 
-  if (!isProduction || !hasDist) {
-    console.log('Using Vite middleware for serving assets');
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
+  if (isProduction && hasDist) {
     console.log('Serving static assets from dist directory');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
