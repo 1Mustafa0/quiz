@@ -68,23 +68,23 @@ const QuizResult: React.FC = () => {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="bg-white p-12 rounded-3xl border border-gray-100 shadow-xl text-center space-y-8"
+        className="bg-white p-8 sm:p-12 rounded-3xl border border-gray-100 shadow-xl text-center space-y-6 sm:space-y-8"
       >
         <div className="relative inline-block">
-          <div className="w-48 h-48 rounded-full border-8 border-indigo-50 flex items-center justify-center">
+          <div className="w-36 h-36 sm:w-48 sm:h-48 rounded-full border-8 border-indigo-50 flex items-center justify-center">
             <div className="text-center">
-              <div className="text-6xl font-extrabold text-indigo-600">{percentage}%</div>
-              <div className="text-gray-500 font-medium">النتيجة</div>
+              <div className="text-4xl sm:text-6xl font-extrabold text-indigo-600">{percentage}%</div>
+              <div className="text-xs sm:text-gray-500 font-medium">النتيجة</div>
             </div>
           </div>
-          <div className="absolute -top-4 -right-4 w-16 h-16 bg-yellow-400 rounded-full flex items-center justify-center text-white shadow-lg animate-bounce">
-            <Trophy className="w-8 h-8" />
+          <div className="absolute -top-2 -right-2 sm:-top-4 sm:-right-4 w-12 h-12 sm:w-16 sm:h-16 bg-yellow-400 rounded-full flex items-center justify-center text-white shadow-lg animate-bounce">
+            <Trophy className="w-6 h-6 sm:w-8 sm:h-8" />
           </div>
         </div>
 
         <div className="space-y-2">
-          <h2 className={`text-3xl font-bold ${feedback.color}`}>{feedback.message}</h2>
-          <p className="text-gray-600 text-lg">
+          <h2 className={`text-2xl sm:text-3xl font-bold ${feedback.color}`}>{feedback.message}</h2>
+          <p className="text-gray-600 text-base sm:text-lg">
             لقد أجبت على <span className="font-bold text-gray-900">{result.score}</span> من أصل <span className="font-bold text-gray-900">{result.totalQuestions}</span> أسئلة بشكل صحيح.
           </p>
         </div>
@@ -109,7 +109,7 @@ const QuizResult: React.FC = () => {
 
       {/* Detailed Review */}
       <div className="space-y-6">
-        <h3 className="text-2xl font-bold text-gray-900">مراجعة الإجابات</h3>
+        <h3 className="text-xl sm:text-2xl font-bold text-gray-900">مراجعة الإجابات</h3>
         <div className="space-y-4">
           {result.answers.map((ans, index) => (
             <motion.div
@@ -121,15 +121,15 @@ const QuizResult: React.FC = () => {
             >
               <button
                 onClick={() => setExpandedIndex(expandedIndex === index ? null : index)}
-                className="w-full p-6 text-left flex items-start justify-between group"
+                className="w-full p-4 sm:p-6 text-left flex items-start justify-between group"
               >
-                <div className="flex items-start space-x-4">
-                  <div className={`mt-1 w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${ans.isCorrect ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
-                    {ans.isCorrect ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+                <div className="flex items-start space-x-3 sm:space-x-4">
+                  <div className={`mt-1 w-5 h-5 sm:w-6 sm:h-6 rounded-full flex items-center justify-center flex-shrink-0 ${ans.isCorrect ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+                    {ans.isCorrect ? <CheckCircle2 className="w-3 h-3 sm:w-4 sm:h-4" /> : <XCircle className="w-3 h-3 sm:w-4 sm:h-4" />}
                   </div>
                   <div className="space-y-1">
-                    <p className="font-bold text-gray-900 leading-tight">{ans.question}</p>
-                    <div className="flex items-center space-x-4 text-sm">
+                    <p className="font-bold text-gray-900 leading-tight text-sm sm:text-base">{ans.question}</p>
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-4 text-xs sm:text-sm gap-1 sm:gap-0">
                       <span className={ans.isCorrect ? 'text-green-600' : 'text-red-600'}>
                         إجابتك: <span className="font-bold">{ans.userAnswer || '(بدون إجابة)'}</span>
                       </span>
@@ -141,7 +141,7 @@ const QuizResult: React.FC = () => {
                     </div>
                   </div>
                 </div>
-                {expandedIndex === index ? <ChevronUp className="w-5 h-5 text-gray-400" /> : <ChevronDown className="w-5 h-5 text-gray-400" />}
+                {expandedIndex === index ? <ChevronUp className="w-5 h-5 text-gray-400 flex-shrink-0" /> : <ChevronDown className="w-5 h-5 text-gray-400 flex-shrink-0" />}
               </button>
 
               <AnimatePresence>

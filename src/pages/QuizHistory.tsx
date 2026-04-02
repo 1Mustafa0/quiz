@@ -124,10 +124,10 @@ const QuizHistory: React.FC = () => {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.95 }}
                   onClick={() => navigate(`/result/${result.id}`)}
-                  className="group bg-white p-6 rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-all cursor-pointer flex flex-col md:flex-row md:items-center justify-between gap-6"
+                  className="group bg-white p-4 sm:p-6 rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-4 sm:gap-6"
                 >
-                  <div className="flex items-center space-x-4">
-                    <div className={`w-16 h-16 rounded-2xl flex items-center justify-center text-2xl font-bold ${
+                  <div className="flex items-center space-x-3 sm:space-x-4">
+                    <div className={`w-12 h-12 sm:w-16 sm:h-16 rounded-2xl flex items-center justify-center text-lg sm:text-2xl font-bold flex-shrink-0 ${
                       percentage >= 80 ? 'bg-green-50 text-green-600' :
                       percentage >= 50 ? 'bg-yellow-50 text-yellow-600' :
                       'bg-red-50 text-red-600'
@@ -135,24 +135,24 @@ const QuizHistory: React.FC = () => {
                       {percentage}%
                     </div>
                     <div>
-                      <h3 className="text-xl font-bold text-gray-900 group-hover:text-indigo-600 transition-colors">
+                      <h3 className="text-lg sm:text-xl font-bold text-gray-900 group-hover:text-indigo-600 transition-colors line-clamp-1">
                         {result.quizTitle}
                       </h3>
-                      <div className="flex items-center text-sm text-gray-500 mt-1">
-                        <Calendar className="w-4 h-4 mr-1" />
+                      <div className="flex items-center text-[10px] sm:text-sm text-gray-500 mt-1">
+                        <Calendar className="w-3 h-3 sm:w-4 sm:h-4 mr-1" />
                         {date}
                       </div>
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between md:justify-end gap-8">
-                    <div className="text-right">
-                      <div className="text-sm text-gray-500 uppercase tracking-wider font-bold">الدرجة</div>
-                      <div className="text-2xl font-black text-gray-900">
-                        {result.score} <span className="text-gray-400 text-lg">/ {result.totalQuestions}</span>
+                  <div className="flex items-center justify-between sm:justify-end gap-4 sm:gap-8 border-t sm:border-t-0 pt-3 sm:pt-0">
+                    <div className="text-left sm:text-right">
+                      <div className="text-[10px] sm:text-sm text-gray-500 uppercase tracking-wider font-bold">الدرجة</div>
+                      <div className="text-xl sm:text-2xl font-black text-gray-900">
+                        {result.score} <span className="text-gray-400 text-sm sm:text-lg">/ {result.totalQuestions}</span>
                       </div>
                     </div>
-                    <ChevronRight className="w-6 h-6 text-gray-300 group-hover:text-indigo-600 group-hover:translate-x-1 transition-all" />
+                    <ChevronRight className="w-5 h-5 sm:w-6 sm:h-6 text-gray-300 group-hover:text-indigo-600 group-hover:translate-x-1 transition-all" />
                   </div>
                 </motion.div>
               );

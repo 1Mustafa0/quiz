@@ -120,7 +120,7 @@ const Profile: React.FC = () => {
         className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden"
       >
         <div className="h-32 bg-gradient-to-r from-indigo-600 to-purple-600" />
-        <div className="px-8 pb-8">
+        <div className="px-6 sm:px-8 pb-6 sm:pb-8">
           <div className="relative flex justify-between items-end -mt-12 mb-6">
             <div className="relative">
               <div className="w-24 h-24 rounded-2xl bg-white p-1 shadow-lg">

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
-import { LogIn, LogOut, LayoutDashboard, PlusCircle, Library, Home as HomeIcon, AlertCircle, Shield, History, User, Brain } from 'lucide-react';
+import { LogIn, LogOut, LayoutDashboard, PlusCircle, Library, Home as HomeIcon, AlertCircle, Shield, History, User, Brain, Menu, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -9,6 +9,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const [pendingPath, setPendingPath] = useState<string | null>(null);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const navItems = [
     { name: 'Home', path: '/', icon: HomeIcon },
@@ -49,7 +50,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 </div>
                 <span className="text-xl font-bold text-gray-900 tracking-tight">AI Quiz Master</span>
               </div>
-              <div className="hidden sm:ml-8 sm:flex sm:space-x-4">
+              <div className="hidden lg:ml-8 lg:flex lg:space-x-4">
                 {navItems.map((item) => {
                   if (item.protected && !user) return null;
                   if (item.adminOnly && role !== 'admin') return null;
@@ -71,9 +72,9 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 })}
               </div>
             </div>
-            <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-2 sm:space-x-4">
               {user ? (
-                <div className="flex items-center space-x-4">
+                <div className="flex items-center space-x-2 sm:space-x-4">
                   <button
                     onClick={() => handleNavClick('/profile')}
                     className="flex items-center space-x-2 hover:bg-gray-100 p-1.5 rounded-lg transition-colors"
@@ -88,14 +89,14 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                       {user.displayName}
                     </span>
                     {role === 'admin' && (
-                      <span className="bg-indigo-100 text-indigo-700 text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider">
+                      <span className="hidden sm:inline-block bg-indigo-100 text-indigo-700 text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider">
                         Admin
                       </span>
                     )}
                   </button>
                   <button
                     onClick={() => logout()}
-                    className="inline-flex items-center px-3 py-2 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
+                    className="hidden sm:inline-flex items-center px-3 py-2 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
                   >
                     <LogOut className="w-4 h-4 mr-2" />
                     Logout
@@ -107,12 +108,70 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 shadow-sm transition-all"
                 >
                   <LogIn className="w-4 h-4 mr-2" />
-                  Sign In
+                  <span className="hidden sm:inline">Sign In</span>
+                  <span className="sm:hidden">Login</span>
                 </button>
               )}
+              
+              {/* Mobile Menu Button */}
+              <button
+                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+                className="lg:hidden p-2 rounded-md text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+              >
+                {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+              </button>
             </div>
           </div>
         </div>
+
+        {/* Mobile Navigation Menu */}
+        <AnimatePresence>
+          {isMobileMenuOpen && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="lg:hidden border-t border-gray-100 bg-white overflow-hidden"
+            >
+              <div className="px-4 pt-2 pb-6 space-y-1">
+                {navItems.map((item) => {
+                  if (item.protected && !user) return null;
+                  if (item.adminOnly && role !== 'admin') return null;
+                  const isActive = location.pathname === item.path;
+                  return (
+                    <button
+                      key={item.name}
+                      onClick={() => {
+                        handleNavClick(item.path);
+                        setIsMobileMenuOpen(false);
+                      }}
+                      className={`flex items-center w-full px-4 py-3 text-base font-medium rounded-xl transition-all ${
+                        isActive
+                          ? 'text-indigo-600 bg-indigo-50'
+                          : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                      }`}
+                    >
+                      <item.icon className={`w-5 h-5 mr-4 ${isActive ? 'text-indigo-600' : 'text-gray-400'}`} />
+                      {item.name}
+                    </button>
+                  );
+                })}
+                {user && (
+                  <button
+                    onClick={() => {
+                      logout();
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className="flex items-center w-full px-4 py-3 text-base font-medium text-red-600 hover:bg-red-50 rounded-xl transition-all"
+                  >
+                    <LogOut className="w-5 h-5 mr-4" />
+                    Logout
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </nav>
 
       <main className="flex-grow">
@@ -121,18 +180,20 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3 }}
-          className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
+          className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8"
         >
+          <div className="mb-8 text-center animate-pulse">
+            <span className="text-2xl sm:text-4xl font-bold text-indigo-600 drop-shadow-sm font-amiri">
+              متنساش تصل على النبي ❤😊
+            </span>
+          </div>
           {children}
         </motion.div>
       </main>
 
       <footer className="bg-white border-t border-gray-200 py-8">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-gray-500 text-sm">
-          &copy; {new Date().getFullYear()} AI Quiz Master. Powered by Google Gemini.
-          <div className="mt-2 text-indigo-600 font-medium">
-            صنع من قبل Mostafa Al-Sudani
-          </div>
+          © 2026 Mostafa. All rights reserved.
         </div>
       </footer>
 

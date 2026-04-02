@@ -174,75 +174,128 @@ const AdminDashboard: React.FC = () => {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="overflow-x-auto"
             >
-              <table className="w-full text-left">
-                <thead className="bg-gray-50 border-b border-gray-100">
-                  <tr>
-                    <th className="px-6 py-4 text-sm font-semibold text-gray-900">User</th>
-                    <th className="px-6 py-4 text-sm font-semibold text-gray-900">Email</th>
-                    <th className="px-6 py-4 text-sm font-semibold text-gray-900">Role</th>
-                    <th className="px-6 py-4 text-sm font-semibold text-gray-900 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filteredUsers.map((u) => (
-                    <tr key={u.uid} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-6 py-4">
-                        <div className="flex items-center space-x-3">
-                          <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold">
-                            {(u.displayName || u.email || '?')[0].toUpperCase()}
-                          </div>
-                          <div>
-                            <div className="font-medium text-gray-900">{u.displayName || 'Anonymous'}</div>
-                            <div className="text-xs text-gray-500 font-mono">{u.uid}</div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center space-x-2">
-                          <span className="text-gray-600">{u.email}</span>
-                          <button
-                            onClick={() => {
-                              setEditingUser(u);
-                              setNewEmail(u.email);
-                            }}
-                            className="p-1 text-gray-400 hover:text-indigo-600 transition-colors"
-                            title="Edit Email"
-                          >
-                            <Mail className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                          u.role === 'admin' ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-800'
-                        }`}>
-                          {u.role}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <div className="flex items-center justify-end space-x-2">
-                          <Link
-                            to={`/profile/${u.uid}`}
-                            className="p-2 text-gray-400 hover:text-indigo-600 transition-colors"
-                            title="View Profile"
-                          >
-                            <ExternalLink className="w-5 h-5" />
-                          </Link>
-                          <button
-                            onClick={() => toggleUserRole(u.uid, u.role)}
-                            className="p-2 text-gray-400 hover:text-indigo-600 transition-colors"
-                            title="Toggle Admin Role"
-                          >
-                            {u.role === 'admin' ? <ShieldAlert className="w-5 h-5" /> : <Shield className="w-5 h-5" />}
-                          </button>
-                        </div>
-                      </td>
+              <div className="overflow-x-auto hidden md:block">
+                <table className="w-full text-left">
+                  <thead className="bg-gray-50 border-b border-gray-100">
+                    <tr>
+                      <th className="px-6 py-4 text-sm font-semibold text-gray-900">User</th>
+                      <th className="px-6 py-4 text-sm font-semibold text-gray-900">Email</th>
+                      <th className="px-6 py-4 text-sm font-semibold text-gray-900">Role</th>
+                      <th className="px-6 py-4 text-sm font-semibold text-gray-900 text-right">Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {filteredUsers.map((u) => (
+                      <tr key={u.uid} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center space-x-3">
+                            <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold">
+                              {(u.displayName || u.email || '?')[0].toUpperCase()}
+                            </div>
+                            <div>
+                              <div className="font-medium text-gray-900">{u.displayName || 'Anonymous'}</div>
+                              <div className="text-xs text-gray-500 font-mono">{u.uid}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center space-x-2">
+                            <span className="text-gray-600">{u.email}</span>
+                            <button
+                              onClick={() => {
+                                setEditingUser(u);
+                                setNewEmail(u.email);
+                              }}
+                              className="p-1 text-gray-400 hover:text-indigo-600 transition-colors"
+                              title="Edit Email"
+                            >
+                              <Mail className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                            u.role === 'admin' ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-800'
+                          }`}>
+                            {u.role}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <div className="flex items-center justify-end space-x-2">
+                            <Link
+                              to={`/profile/${u.uid}`}
+                              className="p-2 text-gray-400 hover:text-indigo-600 transition-colors"
+                              title="View Profile"
+                            >
+                              <ExternalLink className="w-5 h-5" />
+                            </Link>
+                            <button
+                              onClick={() => toggleUserRole(u.uid, u.role)}
+                              className="p-2 text-gray-400 hover:text-indigo-600 transition-colors"
+                              title="Toggle Admin Role"
+                            >
+                              {u.role === 'admin' ? <ShieldAlert className="w-5 h-5" /> : <Shield className="w-5 h-5" />}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Mobile User Cards */}
+              <div className="md:hidden divide-y divide-gray-100">
+                {filteredUsers.map((u) => (
+                  <div key={u.uid} className="p-4 space-y-4">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold">
+                        {(u.displayName || u.email || '?')[0].toUpperCase()}
+                      </div>
+                      <div>
+                        <div className="font-medium text-gray-900">{u.displayName || 'Anonymous'}</div>
+                        <div className="text-xs text-gray-500 font-mono">{u.uid}</div>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <span className="text-sm text-gray-600">{u.email}</span>
+                        <button
+                          onClick={() => {
+                            setEditingUser(u);
+                            setNewEmail(u.email);
+                          }}
+                          className="p-1 text-gray-400 hover:text-indigo-600 transition-colors"
+                        >
+                          <Mail className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-medium ${
+                        u.role === 'admin' ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-800'
+                      }`}>
+                        {u.role}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-end space-x-4 pt-2">
+                      <Link
+                        to={`/profile/${u.uid}`}
+                        className="flex items-center space-x-1 text-sm text-indigo-600 font-medium"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                        <span>Profile</span>
+                      </Link>
+                      <button
+                        onClick={() => toggleUserRole(u.uid, u.role)}
+                        className="flex items-center space-x-1 text-sm text-gray-600 font-medium"
+                      >
+                        {u.role === 'admin' ? <ShieldAlert className="w-4 h-4" /> : <Shield className="w-4 h-4" />}
+                        <span>Role</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </motion.div>
           ) : (
             <motion.div
@@ -250,36 +303,62 @@ const AdminDashboard: React.FC = () => {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="overflow-x-auto"
             >
-              <table className="w-full text-left">
-                <thead className="bg-gray-50 border-b border-gray-100">
-                  <tr>
-                    <th className="px-6 py-4 text-sm font-semibold text-gray-900">Quiz Title</th>
-                    <th className="px-6 py-4 text-sm font-semibold text-gray-900">Category</th>
-                    <th className="px-6 py-4 text-sm font-semibold text-gray-900">Author UID</th>
-                    <th className="px-6 py-4 text-sm font-semibold text-gray-900 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filteredQuizzes.map((q) => (
-                    <tr key={q.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-6 py-4 font-medium text-gray-900">{q.title}</td>
-                      <td className="px-6 py-4 text-gray-600">{q.category || 'General'}</td>
-                      <td className="px-6 py-4 text-xs text-gray-500 font-mono">{q.authorUid}</td>
-                      <td className="px-6 py-4 text-right">
-                        <button
-                          onClick={() => handleDeleteQuiz(q.id)}
-                          className="p-2 text-gray-400 hover:text-red-600 transition-colors"
-                          title="Delete Quiz"
-                        >
-                          <Trash2 className="w-5 h-5" />
-                        </button>
-                      </td>
+              <div className="overflow-x-auto hidden md:block">
+                <table className="w-full text-left">
+                  <thead className="bg-gray-50 border-b border-gray-100">
+                    <tr>
+                      <th className="px-6 py-4 text-sm font-semibold text-gray-900">Quiz Title</th>
+                      <th className="px-6 py-4 text-sm font-semibold text-gray-900">Category</th>
+                      <th className="px-6 py-4 text-sm font-semibold text-gray-900">Author UID</th>
+                      <th className="px-6 py-4 text-sm font-semibold text-gray-900 text-right">Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {filteredQuizzes.map((q) => (
+                      <tr key={q.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-6 py-4 font-medium text-gray-900">{q.title}</td>
+                        <td className="px-6 py-4 text-gray-600">{q.category || 'General'}</td>
+                        <td className="px-6 py-4 text-xs text-gray-500 font-mono">{q.authorUid}</td>
+                        <td className="px-6 py-4 text-right">
+                          <button
+                            onClick={() => handleDeleteQuiz(q.id)}
+                            className="p-2 text-gray-400 hover:text-red-600 transition-colors"
+                            title="Delete Quiz"
+                          >
+                            <Trash2 className="w-5 h-5" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Mobile Quiz Cards */}
+              <div className="md:hidden divide-y divide-gray-100">
+                {filteredQuizzes.map((q) => (
+                  <div key={q.id} className="p-4 space-y-3">
+                    <div className="flex items-start justify-between">
+                      <div className="space-y-1">
+                        <h3 className="font-bold text-gray-900">{q.title}</h3>
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-indigo-50 text-indigo-700 uppercase tracking-wider">
+                          {q.category || 'General'}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteQuiz(q.id)}
+                        className="p-2 text-gray-400 hover:text-red-600 transition-colors"
+                      >
+                        <Trash2 className="w-5 h-5" />
+                      </button>
+                    </div>
+                    <div className="text-[10px] text-gray-500 font-mono break-all">
+                      Author: {q.authorUid}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </motion.div>
           )}
         </AnimatePresence>

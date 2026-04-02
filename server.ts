@@ -28,16 +28,6 @@ async function startServer() {
   const distPath = path.join(process.cwd(), 'dist');
   const hasDist = fs.existsSync(distPath);
 
-  let vite: any;
-  if (!isProduction || !hasDist) {
-    console.log('Using Vite middleware for serving assets');
-    vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  }
-
   app.use(express.json());
 
   // Request logging middleware
@@ -195,7 +185,15 @@ async function startServer() {
 
   console.log(`Server starting in ${isProduction ? 'production' : 'development'} mode`);
 
-  if (isProduction && hasDist) {
+  // Vite middleware for development (MOVED AFTER API ROUTES)
+  if (!isProduction || !hasDist) {
+    console.log('Using Vite middleware for serving assets');
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
     console.log('Serving static assets from dist directory');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {

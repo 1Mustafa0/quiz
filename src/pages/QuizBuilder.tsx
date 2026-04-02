@@ -17,11 +17,11 @@ const QuestionEditor: React.FC<{
     <motion.div
       initial={{ opacity: 0, x: -20 }}
       animate={{ opacity: 1, x: 0 }}
-      className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm space-y-4 relative group"
+      className="bg-white p-4 sm:p-6 rounded-2xl border border-gray-100 shadow-sm space-y-4 relative group"
     >
       <button
         onClick={onRemove}
-        className="absolute top-4 right-4 p-2 text-gray-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+        className="absolute top-4 right-4 p-2 text-gray-400 hover:text-red-500 transition-colors opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
       >
         <Trash2 className="w-5 h-5" />
       </button>
