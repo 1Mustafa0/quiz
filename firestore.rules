@@ -1,0 +1,162 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: Firebase Auth UID
+    // Fields:
+    //   - uid: string (required) - The user's unique ID
+    //   - email: string (required, email format) - The user's email address
+    //   - displayName: string (optional) - The user's display name
+    //   - photoURL: string (optional, url format) - The user's profile photo URL
+    //   - role: string (required, enum: ['admin', 'user']) - The user's role
+    //   - createdAt: timestamp (required) - When the user was created
+    //
+    // Collection: quizzes
+    // Document ID: auto-generated
+    // Fields:
+    //   - title: string (required, max 100) - Quiz title
+    //   - description: string (optional, max 500) - Quiz description
+    //   - category: string (optional) - Quiz category
+    //   - difficulty: string (enum: ['easy', 'medium', 'hard']) - Difficulty level
+    //   - questions: list (required, max 50) - List of question objects
+    //   - authorUid: string (required) - UID of the creator
+    //   - createdAt: timestamp (required) - When the quiz was created
+    //   - timer: number (optional) - Time limit in minutes
+    //
+    // Collection: results
+    // Document ID: auto-generated
+    // Fields:
+    //   - quizId: string (required) - ID of the quiz taken
+    //   - userId: string (required) - UID of the user who took the quiz
+    //   - score: number (required) - Score achieved
+    //   - totalQuestions: number (required) - Total number of questions
+    //   - answers: list (required) - User's answers
+    //   - completedAt: timestamp (required) - When the quiz was finished
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isSuperAdmin() {
+      return isAuthenticated() && 
+             request.auth.token.email == "mstfyalswdany913@gmail.com" && 
+             request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isSuperAdmin() || 
+             (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUrl(url) {
+      return url is string && (url.matches("^https://.*") || url.matches("^http://.*"));
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data, userId) {
+      return hasRequiredFields(['uid', 'email', 'role', 'createdAt']) &&
+             data.uid == userId &&
+             isValidEmail(data.email) &&
+             data.email.size() < 256 &&
+             data.role in ['admin', 'user'] &&
+             data.createdAt is timestamp &&
+             (!('displayName' in data) || data.displayName == null || (data.displayName is string && data.displayName.size() < 100)) &&
+             (!('photoURL' in data) || data.photoURL == null || isValidUrl(data.photoURL));
+    }
+
+    function isValidQuiz(data) {
+      return hasRequiredFields(['title', 'questions', 'authorUid', 'createdAt']) &&
+             data.title is string && data.title.size() > 0 && data.title.size() <= 100 &&
+             data.questions is list && data.questions.size() <= 50 &&
+             data.authorUid == request.auth.uid &&
+             data.createdAt is timestamp &&
+             (!('description' in data) || data.description == null || (data.description is string && data.description.size() <= 500)) &&
+             (!('category' in data) || data.category == null || (data.category is string && data.category.size() <= 50));
+    }
+
+    function isValidResult(data) {
+      return hasRequiredFields(['quizId', 'userId', 'score', 'totalQuestions', 'completedAt']) &&
+             data.quizId is string &&
+             data.userId == request.auth.uid &&
+             data.score is number &&
+             data.totalQuestions is number &&
+             data.completedAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    // Users Collection
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (isOwner(userId) || isAdmin());
+      
+      allow create: if isAuthenticated() && isOwner(userId) && isValidUser(request.resource.data, userId) &&
+                    (request.resource.data.role == 'user' || isSuperAdmin());
+      
+      allow update: if isAuthenticated() && (isOwner(userId) || isAdmin()) && isValidUser(request.resource.data, userId) &&
+                    request.resource.data.createdAt == resource.data.createdAt &&
+                    (
+                      (isOwner(userId) && request.resource.data.role == resource.data.role) || 
+                      isAdmin()
+                    );
+      
+      allow delete: if isAdmin();
+    }
+
+    // Quizzes Collection
+    match /quizzes/{quizId} {
+      allow read: if isAuthenticated();
+      
+      allow create: if isAuthenticated() && isValidQuiz(request.resource.data);
+      
+      allow update: if isAuthenticated() && 
+                    (
+                      (resource.data.authorUid == request.auth.uid && isValidQuiz(request.resource.data)) || 
+                      isAdmin()
+                    );
+      
+      allow delete: if isAuthenticated() && (resource.data.authorUid == request.auth.uid || isAdmin());
+    }
+
+    // Results Collection
+    match /results/{resultId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      
+      allow create: if isAuthenticated() && isValidResult(request.resource.data);
+      
+      allow update, delete: if isAdmin();
+    }
+  }
+}

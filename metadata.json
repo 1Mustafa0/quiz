@@ -1,0 +1,5 @@
+{
+  "name": "AI Quiz Master",
+  "description": "Generate custom quizzes from PDFs, Word documents, PowerPoint presentations, or CSV files using AI. Features include cloud storage, user authentication, and a real-time quiz experience with timers.",
+  "requestFramePermissions": []
+}
