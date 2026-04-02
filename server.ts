@@ -184,6 +184,23 @@ async function startServer() {
       appType: 'spa',
     });
     app.use(vite.middlewares);
+
+    // Explicitly serve index.html through Vite to ensure it's transformed
+    app.get('*', async (req, res, next) => {
+      const url = req.originalUrl;
+      // Skip API routes
+      if (url.startsWith('/api')) return next();
+      
+      try {
+        const fs = await import('fs');
+        let template = await fs.promises.readFile(path.resolve(__dirname, 'index.html'), 'utf-8');
+        template = await vite.transformIndexHtml(url, template);
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
+      } catch (e: any) {
+        vite.ssrFixStacktrace(e);
+        next(e);
+      }
+    });
   } else {
     console.log('Serving static assets from dist directory');
     app.use(express.static(distPath));
