@@ -13,11 +13,19 @@ export default defineConfig(({mode}) => {
     'import.meta.env.VITE_GEMINI_API_KEYS': JSON.stringify(env.GEMINI_API_KEYS || process.env.GEMINI_API_KEYS || ''),
   };
 
+  // Support GEMINI_API_KEY_1 ... GEMINI_API_KEY_10
   for (let i = 1; i <= 10; i++) {
-    const envKey = `GEMINI_API_KEY_${i}`;
-    const val = env[envKey] || process.env[envKey] || '';
-    define[`process.env.${envKey}`] = JSON.stringify(val);
-    define[`import.meta.env.VITE_${envKey}`] = JSON.stringify(val);
+    const k = `GEMINI_API_KEY_${i}`;
+    const val = env[k] || process.env[k] || '';
+    define[`process.env.${k}`] = JSON.stringify(val);
+    define[`import.meta.env.VITE_${k}`] = JSON.stringify(val);
+  }
+
+  // Support numeric-named secrets "1" ... "10" (Replit auto-capture format)
+  for (let i = 1; i <= 10; i++) {
+    const val = env[String(i)] || process.env[String(i)] || '';
+    define[`process.env["${i}"]`] = JSON.stringify(val);
+    define[`import.meta.env.VITE_SECRET_${i}`] = JSON.stringify(val);
   }
 
   return {

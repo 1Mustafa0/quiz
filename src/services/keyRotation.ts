@@ -3,20 +3,30 @@ const getAllApiKeys = (): string[] => {
   const invalid = new Set(['', 'MY_GEMINI_API_KEY', 'undefined', 'null']);
 
   const addKey = (k: string | undefined) => {
-    if (k && !invalid.has(k) && !keys.includes(k)) keys.push(k);
+    if (k && !invalid.has(k.trim()) && !keys.includes(k.trim())) keys.push(k.trim());
   };
 
-  addKey((process.env.GEMINI_API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY));
+  // Primary key
+  addKey(process.env.GEMINI_API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY);
 
+  // Indexed keys: GEMINI_API_KEY_1 ... GEMINI_API_KEY_10
   for (let i = 1; i <= 10; i++) {
     addKey(
-      (process.env[`GEMINI_API_KEY_${i}`] || (import.meta as any).env?.[`VITE_GEMINI_API_KEY_${i}`])
+      process.env[`GEMINI_API_KEY_${i}`] || (import.meta as any).env?.[`VITE_GEMINI_API_KEY_${i}`]
     );
   }
 
-  const multi = (process.env.GEMINI_API_KEYS || (import.meta as any).env?.VITE_GEMINI_API_KEYS || '');
+  // Comma-separated list
+  const multi = process.env.GEMINI_API_KEYS || (import.meta as any).env?.VITE_GEMINI_API_KEYS || '';
   if (multi) {
     multi.split(',').forEach((k: string) => addKey(k.trim()));
+  }
+
+  // Numeric-named secrets: "1", "2", ... "10" (Replit auto-capture format)
+  for (let i = 1; i <= 10; i++) {
+    addKey(
+      process.env[String(i)] || (import.meta as any).env?.[`VITE_SECRET_${i}`]
+    );
   }
 
   return keys;
@@ -27,8 +37,7 @@ let currentIndex = 0;
 export const getNextApiKey = (): string => {
   const keys = getAllApiKeys();
   if (keys.length === 0) return '';
-  const key = keys[currentIndex % keys.length];
-  return key;
+  return keys[currentIndex % keys.length];
 };
 
 export const rotateToNextKey = (): string => {
