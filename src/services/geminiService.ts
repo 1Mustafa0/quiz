@@ -1,16 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-
-const getApiKey = () => {
-  // Try multiple sources for the API key
-  // In Vite, process.env.GEMINI_API_KEY is replaced by the value in vite.config.ts
-  const key = (process.env.GEMINI_API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY) || '';
-  
-  if (!key || key === 'MY_GEMINI_API_KEY' || key === 'undefined' || key === 'null') {
-    console.error('GEMINI_API_KEY is missing or invalid. Current value:', key);
-    return '';
-  }
-  return key;
-};
+import { getNextApiKey, rotateToNextKey, getKeyCount } from "./keyRotation";
 
 export interface GeneratedQuestion {
   type: 'multiple-choice';
@@ -38,12 +27,11 @@ export interface QuizGenerationResponse {
 }
 
 export const generateQuizFromContent = async (params: QuizGenerationParams): Promise<QuizGenerationResponse> => {
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    throw new Error("تنبيه: مفتاح Gemini API غير متوفر. يرجى إضافته في لوحة Secrets في AI Studio.");
+  const totalKeys = getKeyCount();
+  if (totalKeys === 0) {
+    throw new Error("تنبيه: لا يوجد مفتاح Gemini API. يرجى إضافة GEMINI_API_KEY في إعدادات Secrets.");
   }
 
-  const ai = new GoogleGenAI({ apiKey });
   const { content, image, numQuestions, language, difficulty } = params;
 
   if (!content && !image) {
@@ -54,10 +42,7 @@ export const generateQuizFromContent = async (params: QuizGenerationParams): Pro
     throw new Error("المحتوى المستخرج غير صالح أو قصير جداً لتوليد اختبار.");
   }
 
-  console.log("Generating quiz from content. Length:", content?.length || 0, "Image:", !!image);
-  if (content) {
-    console.log("Content preview:", content.substring(0, 200) + "...");
-  }
+  console.log("Generating quiz. Available keys:", totalKeys);
 
   const prompt = `You are an expert quiz generator and content analyst. 
   
@@ -97,10 +82,17 @@ export const generateQuizFromContent = async (params: QuizGenerationParams): Pro
     });
   }
 
-  const maxRetries = 3;
-  let retryCount = 0;
+  let attemptsLeft = totalKeys;
 
   const executeGeneration = async (): Promise<QuizGenerationResponse> => {
+    const apiKey = getNextApiKey();
+    if (!apiKey) {
+      throw new Error("تنبيه: لا يوجد مفتاح Gemini API صالح. يرجى إضافة المفاتيح في إعدادات Secrets.");
+    }
+
+    console.log(`Using API key #${attemptsLeft} (prefix: ${apiKey.substring(0, 8)}...)`);
+    const ai = new GoogleGenAI({ apiKey });
+
     try {
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
@@ -166,16 +158,19 @@ export const generateQuizFromContent = async (params: QuizGenerationParams): Pro
         throw new Error("Failed to parse generated quiz");
       }
     } catch (error: any) {
-      if (error.message?.includes('429') || error.status === 429 || error.message?.includes('quota')) {
-        if (retryCount < maxRetries) {
-          retryCount++;
-          const delay = Math.pow(2, retryCount) * 1000;
-          console.log(`Quota exceeded. Retrying in ${delay}ms (Attempt ${retryCount}/${maxRetries})...`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-          return executeGeneration();
-        }
-        throw new Error("لقد تجاوزت الحد المسموح به من الطلبات حالياً. يرجى الانتظار دقيقة ثم المحاولة مرة أخرى.");
+      const isQuotaError = error.message?.includes('429') || error.status === 429 || error.message?.includes('quota');
+
+      if (isQuotaError && attemptsLeft > 1) {
+        attemptsLeft--;
+        console.warn(`Key quota exceeded. Rotating to next key (${attemptsLeft} remaining)...`);
+        rotateToNextKey();
+        return executeGeneration();
       }
+
+      if (isQuotaError) {
+        throw new Error("جميع مفاتيح API وصلت لحد الاستخدام. يرجى الانتظار قليلاً أو إضافة مفاتيح إضافية.");
+      }
+
       throw error;
     }
   };
