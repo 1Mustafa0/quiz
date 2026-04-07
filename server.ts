@@ -30,7 +30,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = 5000;
 
   // Vite middleware for development
   const isProduction = process.env.NODE_ENV === 'production';
