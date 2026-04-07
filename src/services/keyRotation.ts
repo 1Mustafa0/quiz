@@ -6,8 +6,9 @@ const getAllApiKeys = (): string[] => {
     if (k && !invalid.has(k.trim()) && !keys.includes(k.trim())) keys.push(k.trim());
   };
 
-  // Primary key
+  // Primary keys (multiple accepted names)
   addKey(process.env.GEMINI_API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY);
+  addKey(process.env.GOOGLE_API_KEY || (import.meta as any).env?.VITE_GOOGLE_API_KEY);
 
   // Indexed keys: GEMINI_API_KEY_1 ... GEMINI_API_KEY_10
   for (let i = 1; i <= 10; i++) {
