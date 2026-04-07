@@ -47,6 +47,16 @@ service cloud.firestore {
     //   - createdAt: timestamp (required) - When the task was created
     //   - priority: string (enum: ['low', 'medium', 'high']) - Priority level
     //
+    // Collection: visitors
+    // Document ID: sessionId (UUID from localStorage)
+    // Fields:
+    //   - sessionId: string - Unique session identifier
+    //   - firstVisit: timestamp - When visitor first came
+    //   - lastVisit: timestamp - Most recent visit
+    //   - visitCount: number - Total visits in session
+    //   - isRegistered: boolean - Whether they signed up
+    //   - uid: string (optional) - Firebase UID if registered
+    //
     // ===============================================================
 
     // ===============================================================
@@ -183,6 +193,17 @@ service cloud.firestore {
       allow read, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
       allow create: if isAuthenticated() && isValidTodo(request.resource.data);
       allow update: if isAuthenticated() && resource.data.userId == request.auth.uid && isValidTodo(request.resource.data);
+    }
+
+    // Visitors Collection — open write for anonymous tracking, admin-only read
+    match /visitors/{sessionId} {
+      allow create: if request.resource.data.keys().hasAll(['sessionId', 'firstVisit', 'lastVisit', 'visitCount']) &&
+                       request.resource.data.sessionId is string &&
+                       request.resource.data.firstVisit is timestamp &&
+                       request.resource.data.lastVisit is timestamp &&
+                       request.resource.data.visitCount is number;
+      allow update: if true;
+      allow read, delete: if isAuthenticated() && isAdmin();
     }
   }
 }

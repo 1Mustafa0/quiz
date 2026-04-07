@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './AuthContext';
+import { trackVisit } from './firebase';
 import Layout from './components/Layout';
 import Home from './pages/Home';
 import QuizBuilder from './pages/QuizBuilder';
@@ -33,6 +34,10 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
 
 export default function App() {
   const { user, showWelcome, setShowWelcome } = useAuth();
+
+  useEffect(() => {
+    trackVisit(user?.uid);
+  }, [user?.uid]);
 
   return (
     <Router>

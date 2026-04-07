@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
-import { getFirestore, doc, setDoc, getDoc, collection, query, where, onSnapshot, addDoc, updateDoc, deleteDoc, Timestamp, getDocFromServer, getDocs } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, getDoc, collection, query, where, onSnapshot, addDoc, updateDoc, deleteDoc, Timestamp, getDocFromServer, getDocs, increment } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
 // Initialize Firebase SDK
@@ -99,6 +99,62 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   }
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
+}
+
+// ===============================================================
+// Visitor Tracking
+// ===============================================================
+
+const VISITOR_SESSION_KEY = 'aqm_visitor_session';
+
+function generateSessionId(): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+export async function trackVisit(uid?: string): Promise<void> {
+  try {
+    let sessionId = localStorage.getItem(VISITOR_SESSION_KEY);
+    const isNew = !sessionId;
+
+    if (!sessionId) {
+      sessionId = generateSessionId();
+      localStorage.setItem(VISITOR_SESSION_KEY, sessionId);
+    }
+
+    const visitorRef = doc(db, 'visitors', sessionId);
+    const now = Timestamp.now();
+
+    if (isNew) {
+      await setDoc(visitorRef, {
+        sessionId,
+        firstVisit: now,
+        lastVisit: now,
+        visitCount: 1,
+        isRegistered: !!uid,
+        ...(uid ? { uid } : {}),
+      });
+    } else {
+      await updateDoc(visitorRef, {
+        lastVisit: now,
+        visitCount: increment(1),
+        ...(uid ? { isRegistered: true, uid } : {}),
+      }).catch(() => {
+        setDoc(visitorRef, {
+          sessionId,
+          firstVisit: now,
+          lastVisit: now,
+          visitCount: 1,
+          isRegistered: !!uid,
+          ...(uid ? { uid } : {}),
+        });
+      });
+    }
+  } catch (e) {
+    // Silently fail — tracking should never break the app
+  }
 }
 
 // Connection test
