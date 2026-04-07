@@ -1,10 +1,10 @@
-import React, { useState, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useRef, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { collection, addDoc, Timestamp } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, doc, getDoc, Timestamp } from 'firebase/firestore';
 import { generateQuizFromContent, GeneratedQuestion } from '../services/geminiService';
-import { Upload, FileText, Plus, Trash2, Save, Sparkles, Loader2, AlertCircle, CheckCircle2, ArrowLeft } from 'lucide-react';
+import { Upload, FileText, Plus, Trash2, Save, Sparkles, Loader2, AlertCircle, CheckCircle2, ArrowLeft, Pencil } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ConfirmModal from '../components/ConfirmModal';
 
@@ -87,6 +87,8 @@ const QuestionEditor: React.FC<{
 const QuizBuilder: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const { quizId } = useParams<{ quizId?: string }>();
+  const isEditing = !!quizId;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [title, setTitle] = useState('');
@@ -96,14 +98,40 @@ const QuizBuilder: React.FC = () => {
   const [timer, setTimer] = useState<number>(10);
   const [noTimer, setNoTimer] = useState(false);
   const [questions, setQuestions] = useState<GeneratedQuestion[]>([]);
-  
+  const [loadingQuiz, setLoadingQuiz] = useState(isEditing);
+
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [numQuestions, setNumQuestions] = useState(5);
 
-  const [activeTab, setActiveTab] = useState<'manual' | 'ai' | null>(null);
+  const [activeTab, setActiveTab] = useState<'manual' | 'ai' | null>(isEditing ? 'manual' : null);
+
+  // Load existing quiz when editing
+  useEffect(() => {
+    if (!quizId) return;
+    const load = async () => {
+      try {
+        const snap = await getDoc(doc(db, 'quizzes', quizId));
+        if (!snap.exists()) { navigate('/library'); return; }
+        const data = snap.data();
+        setTitle(data.title || '');
+        setDescription(data.description || '');
+        setCategory(data.category || '');
+        setDifficulty(data.difficulty || 'medium');
+        setTimer(data.timer ?? 10);
+        setNoTimer(data.timer === 0);
+        setQuestions(data.questions || []);
+      } catch (e) {
+        setError('فشل تحميل بيانات الكويز.');
+      } finally {
+        setLoadingQuiz(false);
+      }
+    };
+    load();
+  }, [quizId]);
+
   const [manualText, setManualText] = useState('');
   const [useManualText, setUseManualText] = useState(false);
 
@@ -414,29 +442,43 @@ const QuizBuilder: React.FC = () => {
     setError(null);
 
     try {
-      const quizData = {
-        title,
-        description,
-        category,
-        difficulty,
-        timer,
-        questions,
-        authorUid: user.uid,
-        createdAt: Timestamp.now(),
-      };
-
-      console.log('Saving quiz to Firestore:', quizData);
-      let docRef;
-      try {
-        docRef = await addDoc(collection(db, 'quizzes'), quizData);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.CREATE, 'quizzes');
-      }
-      
-      if (docRef) {
-        console.log('Quiz saved with ID:', docRef.id);
-        setSuccess('Quiz saved successfully! Redirecting to your library...');
+      if (isEditing && quizId) {
+        // Update existing quiz
+        await updateDoc(doc(db, 'quizzes', quizId), {
+          title,
+          description,
+          category,
+          difficulty,
+          timer,
+          questions,
+          updatedAt: Timestamp.now(),
+        });
+        setSuccess('تم حفظ التعديلات بنجاح!');
         setTimeout(() => navigate('/library'), 1500);
+      } else {
+        // Create new quiz
+        const quizData = {
+          title,
+          description,
+          category,
+          difficulty,
+          timer,
+          questions,
+          authorUid: user.uid,
+          createdAt: Timestamp.now(),
+        };
+
+        let docRef;
+        try {
+          docRef = await addDoc(collection(db, 'quizzes'), quizData);
+        } catch (error) {
+          handleFirestoreError(error, OperationType.CREATE, 'quizzes');
+        }
+
+        if (docRef) {
+          setSuccess('Quiz saved successfully! Redirecting to your library...');
+          setTimeout(() => navigate('/library'), 1500);
+        }
       }
     } catch (err: any) {
       console.error('Failed to save quiz:', err);
@@ -445,6 +487,14 @@ const QuizBuilder: React.FC = () => {
       setIsSaving(false);
     }
   };
+
+  if (loadingQuiz) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+      </div>
+    );
+  }
 
   if (activeTab === null) {
     return (
@@ -494,18 +544,18 @@ const QuizBuilder: React.FC = () => {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center space-x-4">
           <button 
-            onClick={() => setActiveTab(null)}
+            onClick={() => isEditing ? navigate('/library') : setActiveTab(null)}
             className="p-2 hover:bg-gray-100 rounded-full transition-colors"
-            title="Go back to selection"
+            title="Go back"
           >
             <ArrowLeft className="w-6 h-6 text-gray-400" />
           </button>
           <div>
             <h1 className="text-3xl font-bold text-gray-900">
-              {activeTab === 'manual' ? 'Manual Builder' : 'AI Generator'}
+              {isEditing ? 'تعديل الكويز' : activeTab === 'manual' ? 'Manual Builder' : 'AI Generator'}
             </h1>
             <p className="text-gray-600">
-              {activeTab === 'manual' ? 'Create your quiz manually' : 'Generate questions using AI'}
+              {isEditing ? 'عدّل إعدادات وأسئلة الكويز ثم احفظ' : activeTab === 'manual' ? 'Create your quiz manually' : 'Generate questions using AI'}
             </p>
           </div>
         </div>
@@ -523,8 +573,8 @@ const QuizBuilder: React.FC = () => {
             disabled={isSaving || isGenerating || questions.length === 0}
             className="inline-flex items-center px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 shadow-md transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {isSaving ? <Loader2 className="w-5 h-5 mr-2 animate-spin" /> : <Save className="w-5 h-5 mr-2" />}
-            Save Quiz
+            {isSaving ? <Loader2 className="w-5 h-5 mr-2 animate-spin" /> : isEditing ? <Pencil className="w-5 h-5 mr-2" /> : <Save className="w-5 h-5 mr-2" />}
+            {isEditing ? 'حفظ التعديلات' : 'Save Quiz'}
           </button>
         </div>
       </div>

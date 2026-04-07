@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { collection, query, where, onSnapshot, deleteDoc, doc, orderBy } from 'firebase/firestore';
-import { Play, Trash2, Clock, BookOpen, BarChart, Search, Filter, Plus } from 'lucide-react';
+import { Play, Trash2, Clock, BookOpen, BarChart, Search, Filter, Plus, Pencil } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ConfirmModal from '../components/ConfirmModal';
 
@@ -151,18 +151,28 @@ const QuizLibrary: React.FC = () => {
               >
                 <div className="p-6 flex-grow space-y-4">
                   <div className="flex items-start justify-between">
-                    <div className="space-y-1">
+                    <div className="space-y-1 flex-1 min-w-0 mr-2">
                       <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-indigo-50 text-indigo-700 uppercase tracking-wider">
                         {quiz.category || 'General'}
                       </span>
                       <h3 className="text-xl font-bold text-gray-900 line-clamp-1">{quiz.title}</h3>
                     </div>
-                    <button
-                      onClick={() => setQuizToDelete(quiz.id)}
-                      className="p-2 text-gray-400 hover:text-red-500 transition-colors"
-                    >
-                      <Trash2 className="w-5 h-5" />
-                    </button>
+                    <div className="flex items-center space-x-1 flex-shrink-0">
+                      <Link
+                        to={`/edit/${quiz.id}`}
+                        className="p-2 text-gray-400 hover:text-indigo-600 transition-colors"
+                        title="تعديل الكويز"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </Link>
+                      <button
+                        onClick={() => setQuizToDelete(quiz.id)}
+                        className="p-2 text-gray-400 hover:text-red-500 transition-colors"
+                        title="حذف الكويز"
+                      >
+                        <Trash2 className="w-5 h-5" />
+                      </button>
+                    </div>
                   </div>
                   
                   <p className="text-gray-600 text-sm line-clamp-2 min-h-[2.5rem]">

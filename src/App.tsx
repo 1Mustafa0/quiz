@@ -66,6 +66,14 @@ export default function App() {
               }
             />
             <Route
+              path="/edit/:quizId"
+              element={
+                <ProtectedRoute>
+                  <QuizBuilder />
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/play/:quizId"
               element={
                 <ProtectedRoute>
