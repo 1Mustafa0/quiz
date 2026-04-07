@@ -2,9 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { useParams, Navigate, Link } from 'react-router-dom';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
-import { User, Mail, Calendar, Award, BookOpen, BarChart2, Copy, Check, Shield, ExternalLink } from 'lucide-react';
+import { User, Mail, Calendar, Award, BookOpen, BarChart2, Copy, Check, Shield, ExternalLink, Crown } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useAuth } from '../AuthContext';
+
+const OWNER_EMAIL = 'mstfyalswdany913@gmail.com';
 
 interface UserProfile {
   uid: string;
@@ -132,7 +134,11 @@ const Profile: React.FC = () => {
                   )}
                 </div>
               </div>
-              {profile.role === 'admin' && (
+              {profile.email === OWNER_EMAIL ? (
+                <div className="absolute -top-2 -right-2 bg-amber-500 text-white p-1.5 rounded-lg shadow-lg" title="مالك الموقع">
+                  <Crown className="w-4 h-4" />
+                </div>
+              ) : profile.role === 'admin' && (
                 <div className="absolute -top-2 -right-2 bg-purple-600 text-white p-1.5 rounded-lg shadow-lg">
                   <Shield className="w-4 h-4" />
                 </div>
@@ -150,7 +156,18 @@ const Profile: React.FC = () => {
 
           <div className="space-y-4">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">{profile.displayName || 'Anonymous User'}</h1>
+              <div className="flex items-center flex-wrap gap-3">
+                <h1 className="text-3xl font-bold text-gray-900">{profile.displayName || 'Anonymous User'}</h1>
+                {profile.email === OWNER_EMAIL ? (
+                  <span className="inline-flex items-center gap-1 px-3 py-1 bg-amber-100 text-amber-700 text-sm font-semibold rounded-full border border-amber-200">
+                    <Crown className="w-3.5 h-3.5" /> مالك الموقع
+                  </span>
+                ) : profile.role === 'admin' && (
+                  <span className="inline-flex items-center gap-1 px-3 py-1 bg-purple-100 text-purple-700 text-sm font-semibold rounded-full border border-purple-200">
+                    <Shield className="w-3.5 h-3.5" /> مشرف
+                  </span>
+                )}
+              </div>
               <div className="flex items-center space-x-4 mt-2 text-gray-600">
                 <div className="flex items-center space-x-1">
                   <Mail className="w-4 h-4" />
