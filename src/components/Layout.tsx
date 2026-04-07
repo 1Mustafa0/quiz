@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
-import { LogIn, LogOut, LayoutDashboard, PlusCircle, Library, Home as HomeIcon, AlertCircle, Shield, History, User, Brain, Menu, X, CheckSquare } from 'lucide-react';
+import { useTheme } from '../contexts/ThemeContext';
+import { LogIn, LogOut, LayoutDashboard, PlusCircle, Library, Home as HomeIcon, AlertCircle, Shield, History, User, Brain, Menu, X, CheckSquare, Sun, Moon } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, role, login, logout, isQuizActive } = useAuth();
+  const { isDark, toggleTheme } = useTheme();
   const location = useLocation();
   const navigate = useNavigate();
   const [pendingPath, setPendingPath] = useState<string | null>(null);
@@ -37,19 +39,19 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      <nav className="bg-white border-b border-gray-200 sticky top-0 z-50">
+    <div className="min-h-screen bg-gray-50 dark:bg-slate-900 flex flex-col transition-colors duration-300">
+      <nav className="bg-white dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700 sticky top-0 z-50 transition-colors duration-300">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
             <div className="flex items-center">
-              <div 
+              <div
                 onClick={() => handleNavClick('/')}
                 className="flex items-center space-x-2 cursor-pointer group"
               >
                 <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center group-hover:bg-indigo-700 transition-all shadow-sm group-hover:shadow-md">
                   <Brain className="text-white w-6 h-6" />
                 </div>
-                <span className="text-xl font-bold text-gray-900 tracking-tight">AI Quiz Master</span>
+                <span className="text-xl font-bold text-gray-900 dark:text-white tracking-tight">AI Quiz Master</span>
               </div>
               <div className="hidden lg:ml-8 lg:flex lg:space-x-4">
                 {navItems.map((item) => {
@@ -62,8 +64,8 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                       onClick={() => handleNavClick(item.path)}
                       className={`inline-flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors ${
                         isActive
-                          ? 'text-indigo-600 bg-indigo-50'
-                          : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                          ? 'text-indigo-600 bg-indigo-50 dark:bg-indigo-900/40 dark:text-indigo-400'
+                          : 'text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200 hover:bg-gray-100 dark:hover:bg-slate-700'
                       }`}
                     >
                       <item.icon className="w-4 h-4 mr-2" />
@@ -73,31 +75,41 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 })}
               </div>
             </div>
-            <div className="flex items-center space-x-2 sm:space-x-4">
+            <div className="flex items-center space-x-2 sm:space-x-3">
+
+              {/* Dark Mode Toggle */}
+              <button
+                onClick={toggleTheme}
+                className="p-2 rounded-lg text-gray-500 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors"
+                title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+              >
+                {isDark ? <Sun className="w-5 h-5 text-yellow-400" /> : <Moon className="w-5 h-5" />}
+              </button>
+
               {user ? (
-                <div className="flex items-center space-x-2 sm:space-x-4">
+                <div className="flex items-center space-x-2 sm:space-x-3">
                   <button
                     onClick={() => handleNavClick('/profile')}
-                    className="flex items-center space-x-2 hover:bg-gray-100 p-1.5 rounded-lg transition-colors"
+                    className="flex items-center space-x-2 hover:bg-gray-100 dark:hover:bg-slate-700 p-1.5 rounded-lg transition-colors"
                   >
                     <img
                       src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName}`}
                       alt="Profile"
-                      className="w-8 h-8 rounded-full border border-gray-200"
+                      className="w-8 h-8 rounded-full border border-gray-200 dark:border-slate-600"
                       referrerPolicy="no-referrer"
                     />
-                    <span className="hidden md:block text-sm font-medium text-gray-700">
+                    <span className="hidden md:block text-sm font-medium text-gray-700 dark:text-slate-300">
                       {user.displayName}
                     </span>
                     {role === 'admin' && (
-                      <span className="hidden sm:inline-block bg-indigo-100 text-indigo-700 text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider">
+                      <span className="hidden sm:inline-block bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider">
                         Admin
                       </span>
                     )}
                   </button>
                   <button
                     onClick={() => logout()}
-                    className="hidden sm:inline-flex items-center px-3 py-2 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
+                    className="hidden sm:inline-flex items-center px-3 py-2 text-sm font-medium text-gray-700 dark:text-slate-300 hover:text-gray-900 dark:hover:text-white transition-colors"
                   >
                     <LogOut className="w-4 h-4 mr-2" />
                     Logout
@@ -113,11 +125,11 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   <span className="sm:hidden">Login</span>
                 </button>
               )}
-              
+
               {/* Mobile Menu Button */}
               <button
                 onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-                className="lg:hidden p-2 rounded-md text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+                className="lg:hidden p-2 rounded-md text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200 hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors"
               >
                 {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
               </button>
@@ -132,7 +144,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
-              className="lg:hidden border-t border-gray-100 bg-white overflow-hidden"
+              className="lg:hidden border-t border-gray-100 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden"
             >
               <div className="px-4 pt-2 pb-6 space-y-1">
                 {navItems.map((item) => {
@@ -148,11 +160,11 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                       }}
                       className={`flex items-center w-full px-4 py-3 text-base font-medium rounded-xl transition-all ${
                         isActive
-                          ? 'text-indigo-600 bg-indigo-50'
-                          : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                          ? 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/40'
+                          : 'text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-slate-700'
                       }`}
                     >
-                      <item.icon className={`w-5 h-5 mr-4 ${isActive ? 'text-indigo-600' : 'text-gray-400'}`} />
+                      <item.icon className={`w-5 h-5 mr-4 ${isActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-slate-500'}`} />
                       {item.name}
                     </button>
                   );
@@ -163,7 +175,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                       logout();
                       setIsMobileMenuOpen(false);
                     }}
-                    className="flex items-center w-full px-4 py-3 text-base font-medium text-red-600 hover:bg-red-50 rounded-xl transition-all"
+                    className="flex items-center w-full px-4 py-3 text-base font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-all"
                   >
                     <LogOut className="w-5 h-5 mr-4" />
                     Logout
@@ -192,8 +204,8 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         </motion.div>
       </main>
 
-      <footer className="bg-white border-t border-gray-200 py-8">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-gray-500 text-sm">
+      <footer className="bg-white dark:bg-slate-800 border-t border-gray-200 dark:border-slate-700 py-8 transition-colors duration-300">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-gray-500 dark:text-slate-400 text-sm">
           © 2026 Mostafa. All rights reserved.
         </div>
       </footer>
@@ -206,19 +218,19 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-white p-8 rounded-3xl max-w-md w-full shadow-2xl text-center space-y-6"
+              className="bg-white dark:bg-slate-800 p-8 rounded-3xl max-w-md w-full shadow-2xl text-center space-y-6"
             >
-              <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto">
+              <div className="w-16 h-16 bg-red-100 dark:bg-red-900/30 text-red-600 rounded-full flex items-center justify-center mx-auto">
                 <AlertCircle className="w-8 h-8" />
               </div>
               <div className="space-y-2">
-                <h3 className="text-2xl font-bold text-gray-900">الخروج من الكويز؟</h3>
-                <p className="text-gray-600">هل تريد الخروج قبل إتمام الكويز؟ لن يتم حفظ تقدمك.</p>
+                <h3 className="text-2xl font-bold text-gray-900 dark:text-white">الخروج من الكويز؟</h3>
+                <p className="text-gray-600 dark:text-slate-400">هل تريد الخروج قبل إتمام الكويز؟ لن يتم حفظ تقدمك.</p>
               </div>
               <div className="flex gap-4">
                 <button
                   onClick={() => setPendingPath(null)}
-                  className="flex-1 px-6 py-3 bg-gray-100 text-gray-700 rounded-xl font-semibold hover:bg-gray-200 transition-all"
+                  className="flex-1 px-6 py-3 bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-slate-300 rounded-xl font-semibold hover:bg-gray-200 dark:hover:bg-slate-600 transition-all"
                 >
                   البقاء
                 </button>
