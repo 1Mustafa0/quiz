@@ -14,6 +14,7 @@ export const loginWithGoogle = async () => {
   try {
     const result = await signInWithPopup(auth, googleProvider);
     const user = result.user;
+
     // Sync user to firestore
     try {
       await setDoc(doc(db, 'users', user.uid), {
@@ -28,8 +29,20 @@ export const loginWithGoogle = async () => {
       handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}`);
     }
     return user;
-  } catch (error) {
+  } catch (error: any) {
     console.error('Login error:', error);
+    if (error?.code === 'auth/unauthorized-domain') {
+      const domain = window.location.hostname;
+      throw new Error(
+        `هذا الدومين غير مصرح به في Firebase: "${domain}"\n\nيجب إضافته في Firebase Console:\nAuthentication → Settings → Authorized domains`
+      );
+    }
+    if (error?.code === 'auth/popup-blocked') {
+      throw new Error('تم حجب النافذة المنبثقة. يرجى السماح بالنوافذ المنبثقة في المتصفح ثم المحاولة مرة أخرى.');
+    }
+    if (error?.code === 'auth/popup-closed-by-user') {
+      throw new Error('تم إغلاق نافذة تسجيل الدخول. يرجى المحاولة مرة أخرى.');
+    }
     throw error;
   }
 };
