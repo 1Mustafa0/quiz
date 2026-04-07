@@ -53,6 +53,9 @@ const FocusMusicPlayer: React.FC = () => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const isMounted = useRef(true);
+  const playPromiseRef = useRef<Promise<void> | null>(null);
+
   const filteredSurahs = useMemo(() => {
     return SURAH_NAMES.map((name, index) => ({
       id: `quran-${index + 1}`,
@@ -68,37 +71,84 @@ const FocusMusicPlayer: React.FC = () => {
     }
   }, [volume]);
 
-  const togglePlay = () => {
-    if (!currentTrack) return;
+  // Component mount/unmount tracking
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = "";
+        audioRef.current.load();
+      }
+    };
+  }, []);
+
+  // Cleanup custom track URLs when they change or on unmount
+  useEffect(() => {
+    const tracksToCleanup = [...customTracks];
+    return () => {
+      tracksToCleanup.forEach(track => {
+        if (track.isCustom && track.url.startsWith('blob:')) {
+          URL.revokeObjectURL(track.url);
+        }
+      });
+    };
+  }, [customTracks]);
+
+  const togglePlay = async () => {
+    if (!currentTrack || !audioRef.current) return;
     setError(null);
     
     if (isPlaying) {
-      audioRef.current?.pause();
+      audioRef.current.pause();
+      setIsPlaying(false);
     } else {
-      audioRef.current?.play().catch(err => {
-        console.error("Playback failed:", err);
-        setError("فشل تشغيل الملف الصوتي");
-        setIsPlaying(false);
-      });
+      try {
+        playPromiseRef.current = audioRef.current.play();
+        await playPromiseRef.current;
+        if (isMounted.current) {
+          setIsPlaying(true);
+        }
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          console.error("Playback failed:", err);
+          if (isMounted.current) {
+            setError("فشل تشغيل الملف الصوتي");
+            setIsPlaying(false);
+          }
+        }
+      }
     }
-    setIsPlaying(!isPlaying);
   };
 
-  const selectTrack = (track: SoundTrack) => {
+  const selectTrack = async (track: SoundTrack) => {
     setError(null);
     if (currentTrack?.id === track.id) {
       togglePlay();
     } else {
+      // If there's a pending play promise, we should probably wait or handle it
+      // But setting src will abort it anyway, which we handle in the catch block
+      
       setCurrentTrack(track);
-      setIsPlaying(true);
       if (audioRef.current) {
         audioRef.current.src = track.url;
         audioRef.current.load(); // Force reload for new source
-        audioRef.current.play().catch(err => {
-          console.error("Audio playback failed:", err);
-          setError("فشل تحميل أو تشغيل الملف الصوتي");
-          setIsPlaying(false);
-        });
+        try {
+          playPromiseRef.current = audioRef.current.play();
+          await playPromiseRef.current;
+          if (isMounted.current) {
+            setIsPlaying(true);
+          }
+        } catch (err: any) {
+          if (err.name !== 'AbortError') {
+            console.error("Audio playback failed:", err);
+            if (isMounted.current) {
+              setError("فشل تحميل أو تشغيل الملف الصوتي");
+              setIsPlaying(false);
+            }
+          }
+        }
       }
     }
   };

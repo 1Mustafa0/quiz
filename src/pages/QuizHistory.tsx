@@ -108,13 +108,13 @@ const QuizHistory: React.FC = () => {
           <AnimatePresence mode="popLayout">
             {filteredResults.map((result) => {
               const percentage = Math.round((result.score / result.totalQuestions) * 100);
-              const date = result.completedAt?.toDate().toLocaleDateString('ar-EG', {
+              const date = result.completedAt?.toDate()?.toLocaleDateString('ar-EG', {
                 year: 'numeric',
                 month: 'long',
                 day: 'numeric',
                 hour: '2-digit',
                 minute: '2-digit'
-              });
+              }) || 'تاريخ غير معروف';
 
               return (
                 <motion.div

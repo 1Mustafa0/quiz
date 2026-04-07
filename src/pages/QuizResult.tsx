@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { doc, getDoc } from 'firebase/firestore';
-import { CheckCircle2, XCircle, Trophy, RotateCcw, Library, ChevronDown, ChevronUp, MessageSquare } from 'lucide-react';
+import { CheckCircle2, XCircle, Trophy, RotateCcw, Library, ChevronDown, ChevronUp, MessageSquare, Bookmark } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface AnswerResult {
@@ -11,6 +11,7 @@ interface AnswerResult {
   correctAnswer: string;
   isCorrect: boolean;
   feedback: string;
+  isMarked?: boolean;
 }
 
 interface Result {
@@ -128,7 +129,15 @@ const QuizResult: React.FC = () => {
                     {ans.isCorrect ? <CheckCircle2 className="w-3 h-3 sm:w-4 sm:h-4" /> : <XCircle className="w-3 h-3 sm:w-4 sm:h-4" />}
                   </div>
                   <div className="space-y-1">
-                    <p className="font-bold text-gray-900 leading-tight text-sm sm:text-base">{ans.question}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-bold text-gray-900 leading-tight text-sm sm:text-base">{ans.question}</p>
+                      {ans.isMarked && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-50 text-amber-600 border border-amber-100">
+                          <Bookmark className="w-3 h-3 mr-1 fill-current" />
+                          مُعلم للمراجعة
+                        </span>
+                      )}
+                    </div>
                     <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-4 text-xs sm:text-sm gap-1 sm:gap-0">
                       <span className={ans.isCorrect ? 'text-green-600' : 'text-red-600'}>
                         إجابتك: <span className="font-bold">{ans.userAnswer || '(بدون إجابة)'}</span>

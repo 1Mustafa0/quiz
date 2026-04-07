@@ -5,6 +5,7 @@ import { db, handleFirestoreError, OperationType } from '../firebase';
 import { collection, query, where, onSnapshot, deleteDoc, doc, orderBy } from 'firebase/firestore';
 import { Play, Trash2, Clock, BookOpen, BarChart, Search, Filter, Plus } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import ConfirmModal from '../components/ConfirmModal';
 
 interface Quiz {
   id: string;
@@ -200,40 +201,16 @@ const QuizLibrary: React.FC = () => {
       )}
 
       {/* Delete Confirmation Modal */}
-      <AnimatePresence>
-        {quizToDelete && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-white p-8 rounded-3xl max-w-md w-full shadow-2xl text-center space-y-6"
-            >
-              <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto">
-                <Trash2 className="w-8 h-8" />
-              </div>
-              <div className="space-y-2">
-                <h3 className="text-2xl font-bold text-gray-900">Delete Quiz?</h3>
-                <p className="text-gray-600">This action cannot be undone. Are you sure you want to delete this quiz?</p>
-              </div>
-              <div className="flex gap-4">
-                <button
-                  onClick={() => setQuizToDelete(null)}
-                  className="flex-1 px-6 py-3 bg-gray-100 text-gray-700 rounded-xl font-semibold hover:bg-gray-200 transition-all"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleDelete}
-                  className="flex-1 px-6 py-3 bg-red-600 text-white rounded-xl font-semibold hover:bg-red-700 transition-all"
-                >
-                  Delete
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <ConfirmModal
+        isOpen={!!quizToDelete}
+        onClose={() => setQuizToDelete(null)}
+        onConfirm={handleDelete}
+        title="حذف الكويز؟"
+        message="هل أنت متأكد من حذف هذا الكويز؟ لا يمكن التراجع عن هذا الإجراء."
+        confirmText="حذف"
+        cancelText="إلغاء"
+        type="danger"
+      />
     </div>
   );
 };

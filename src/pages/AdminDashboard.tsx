@@ -5,6 +5,7 @@ import { Users, BookOpen, Trash2, Shield, ShieldAlert, Search, Mail, User, Exter
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../AuthContext';
 import { Navigate, Link } from 'react-router-dom';
+import ConfirmModal from '../components/ConfirmModal';
 
 interface UserProfile {
   uid: string;
@@ -31,6 +32,19 @@ const AdminDashboard: React.FC = () => {
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
   const [newEmail, setNewEmail] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
+  const [confirmConfig, setConfirmConfig] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    type: 'danger' | 'info' | 'warning';
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+    type: 'info'
+  });
 
   useEffect(() => {
     if (role !== 'admin') return;
@@ -65,29 +79,49 @@ const AdminDashboard: React.FC = () => {
   if (authLoading) return null;
   if (role !== 'admin') return <Navigate to="/" />;
 
-  const handleDeleteQuiz = async (quizId: string) => {
-    if (!window.confirm('Are you sure you want to delete this quiz?')) return;
-    try {
-      await deleteDoc(doc(db, 'quizzes', quizId));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `quizzes/${quizId}`);
-    }
+  const handleDeleteQuiz = (quizId: string) => {
+    setConfirmConfig({
+      isOpen: true,
+      title: 'حذف الكويز؟',
+      message: 'هل أنت متأكد من حذف هذا الكويز؟ لا يمكن التراجع عن هذا الإجراء.',
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'quizzes', quizId));
+        } catch (error) {
+          handleFirestoreError(error, OperationType.DELETE, `quizzes/${quizId}`);
+        }
+      }
+    });
   };
 
-  const toggleUserRole = async (userId: string, currentRole: string) => {
+  const toggleUserRole = (userId: string, currentRole: string) => {
     const newRole = currentRole === 'admin' ? 'user' : 'admin';
-    if (!window.confirm(`Change user role to ${newRole}?`)) return;
-    try {
-      await updateDoc(doc(db, 'users', userId), { role: newRole });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `users/${userId}`);
-    }
+    setConfirmConfig({
+      isOpen: true,
+      title: 'تغيير رتبة المستخدم؟',
+      message: `هل تريد تغيير رتبة المستخدم إلى ${newRole === 'admin' ? 'مدمن' : 'مستخدم'}؟`,
+      type: 'warning',
+      onConfirm: async () => {
+        try {
+          await updateDoc(doc(db, 'users', userId), { role: newRole });
+        } catch (error) {
+          handleFirestoreError(error, OperationType.UPDATE, `users/${userId}`);
+        }
+      }
+    });
   };
 
   const handleUpdateEmail = async () => {
     if (!editingUser || !newEmail) return;
     if (!newEmail.includes('@')) {
-      alert('Please enter a valid email address.');
+      setConfirmConfig({
+        isOpen: true,
+        title: 'بريد غير صالح',
+        message: 'يرجى إدخال عنوان بريد إلكتروني صالح يحتوي على @.',
+        type: 'warning',
+        onConfirm: () => {}
+      });
       return;
     }
 
@@ -375,25 +409,25 @@ const AdminDashboard: React.FC = () => {
               className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden"
             >
               <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-                <h3 className="text-lg font-semibold text-gray-900">Edit User Email</h3>
+                <h3 className="text-lg font-semibold text-gray-900">تعديل بريد المستخدم</h3>
                 <button onClick={() => setEditingUser(null)} className="text-gray-400 hover:text-gray-600">
                   <X className="w-5 h-5" />
                 </button>
               </div>
               <div className="p-6 space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">User</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">المستخدم</label>
                   <div className="text-sm text-gray-900 font-medium">{editingUser.displayName || 'Anonymous'}</div>
                   <div className="text-xs text-gray-500 font-mono">{editingUser.uid}</div>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">New Email Address</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">البريد الإلكتروني الجديد</label>
                   <input
                     type="email"
                     value={newEmail}
                     onChange={(e) => setNewEmail(e.target.value)}
                     className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
-                    placeholder="Enter new email..."
+                    placeholder="أدخل البريد الجديد..."
                   />
                 </div>
               </div>
@@ -402,7 +436,7 @@ const AdminDashboard: React.FC = () => {
                   onClick={() => setEditingUser(null)}
                   className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200 rounded-lg transition-colors"
                 >
-                  Cancel
+                  إلغاء
                 </button>
                 <button
                   onClick={handleUpdateEmail}
@@ -414,13 +448,22 @@ const AdminDashboard: React.FC = () => {
                   ) : (
                     <Check className="w-4 h-4" />
                   )}
-                  <span>Update Email</span>
+                  <span>تحديث البريد</span>
                 </button>
               </div>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
+
+      <ConfirmModal
+        isOpen={confirmConfig.isOpen}
+        onClose={() => setConfirmConfig(prev => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmConfig.onConfirm}
+        title={confirmConfig.title}
+        message={confirmConfig.message}
+        type={confirmConfig.type}
+      />
     </div>
   );
 };

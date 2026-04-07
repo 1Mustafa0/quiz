@@ -17,6 +17,15 @@ import { parse as csvParse } from 'csv-parse/sync';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Global error handlers to prevent process crashes
+process.on('uncaughtException', (err) => {
+  console.error('UNCAUGHT EXCEPTION:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('UNHANDLED REJECTION at:', promise, 'reason:', reason);
+});
+
 const upload = multer({ storage: multer.memoryStorage() });
 
 async function startServer() {
@@ -30,20 +39,22 @@ async function startServer() {
 
   app.use(express.json());
 
-  // Request logging middleware
-  app.use((req, res, next) => {
-    if (!req.url.startsWith('/@') && !req.url.includes('node_modules')) {
-      console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-    }
-    next();
-  });
-
   // Health check route
   app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', message: 'Server is running', env: process.env.NODE_ENV });
+    const hasKey = !!process.env.GEMINI_API_KEY;
+    const keyPrefix = hasKey ? process.env.GEMINI_API_KEY?.substring(0, 5) : 'none';
+    res.json({ 
+      status: 'ok', 
+      message: 'Server is running', 
+      env: process.env.NODE_ENV,
+      hasGeminiKey: hasKey,
+      keyPrefix: keyPrefix
+    });
   });
 
   // API Routes
+  app.get('/favicon.ico', (req, res) => res.status(204).end());
+  
   app.post('/api/parse-file', upload.single('file'), async (req: any, res: any, next: any) => {
     console.log('--- NEW PARSE REQUEST ---');
     console.log('Method:', req.method);
@@ -87,31 +98,56 @@ async function startServer() {
       ) {
         console.log('Parsing Office document:', mimetype || originalname);
         try {
-          // Try promise first
-          try {
-            const extracted = await officeParser.parseOffice(buffer);
-            text = typeof extracted === 'string' ? extracted : (extracted?.text || JSON.stringify(extracted));
-          } catch (pErr) {
-            console.log('Office promise API failed, trying callback API...');
-            text = await new Promise((resolve, reject) => {
-              officeParser.parseOffice(buffer, (data: any, err: any) => {
-                if (err) reject(err);
-                else resolve(typeof data === 'string' ? data : (data?.text || JSON.stringify(data)));
-              });
-            });
-          }
-          console.log('Office extraction successful, length:', text?.length);
-        } catch (err: any) {
-          console.error('Office document parse failed:', err);
+          // Special handling for .docx which mammoth handles better
           if (originalname.toLowerCase().endsWith('.docx')) {
-            console.log('Falling back to mammoth for .docx');
             try {
+              console.log('Using mammoth for .docx');
               const result = await mammoth.extractRawText({ buffer });
               text = result.value;
             } catch (mErr) {
-              console.error('Mammoth fallback failed:', mErr);
+              console.error('Mammoth failed, falling back to officeParser:', mErr);
             }
           }
+
+          // If mammoth didn't get text or it's not a docx, use officeParser
+          if (!text) {
+            try {
+              // Wrap officeParser in a try-catch to handle its internal errors gracefully
+              const extracted = await officeParser.parseOffice(buffer);
+              text = typeof extracted === 'string' ? extracted : (extracted?.text || JSON.stringify(extracted));
+            } catch (pErr: any) {
+              const errMsg = pErr?.message || String(pErr);
+              console.log('Office promise API failed or unsupported format:', errMsg);
+              
+              // If it's an unsupported format error (like CFB), don't bother with callback API
+              const isUnsupported = errMsg.includes('supports docx, pptx, xlsx only') || 
+                                   errMsg.includes('support for cfb files');
+              
+              if (!isUnsupported) {
+                try {
+                  console.log('Trying callback API as fallback...');
+                  text = await new Promise((resolve, reject) => {
+                    // Set a timeout for the callback API to prevent hanging
+                    const timeout = setTimeout(() => reject(new Error('Office callback API timed out')), 5000);
+                    
+                    officeParser.parseOffice(buffer, (data: any, err: any) => {
+                      clearTimeout(timeout);
+                      if (err) reject(err);
+                      else resolve(typeof data === 'string' ? data : (data?.text || JSON.stringify(data)));
+                    });
+                  });
+                } catch (cbErr) {
+                  console.error('Office callback API also failed:', cbErr);
+                }
+              } else {
+                console.log('Skipping callback API due to known unsupported format');
+              }
+            }
+          }
+          
+          console.log('Office extraction result length:', text?.length || 0);
+        } catch (err: any) {
+          console.error('Office document parse block failed:', err);
         }
       } else if (mimetype === 'text/csv' || originalname.toLowerCase().endsWith('.csv')) {
         console.log('Parsing CSV...');
@@ -185,8 +221,8 @@ async function startServer() {
 
   console.log(`Server starting in ${isProduction ? 'production' : 'development'} mode`);
 
-  // Vite middleware for development (MOVED AFTER API ROUTES)
-  if (!isProduction || !hasDist) {
+  // Vite middleware for development
+  if (process.env.NODE_ENV !== 'production') {
     console.log('Using Vite middleware for serving assets');
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -194,11 +230,22 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    console.log('Serving static assets from dist directory');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
+    const distPath = path.join(process.cwd(), 'dist');
+    if (fs.existsSync(distPath)) {
+      console.log('Serving static assets from dist directory');
+      app.use(express.static(distPath));
+      app.get('*', (req, res) => {
+        res.sendFile(path.join(distPath, 'index.html'));
+      });
+    } else {
+      console.error('Production mode enabled but dist directory not found!');
+      // Fallback to Vite if dist is missing even in production
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+    }
   }
 
   app.listen(PORT, '0.0.0.0', () => {

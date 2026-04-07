@@ -158,7 +158,7 @@ const Profile: React.FC = () => {
                 </div>
                 <div className="flex items-center space-x-1">
                   <Calendar className="w-4 h-4" />
-                  <span className="text-sm">Joined {profile.createdAt?.toDate().toLocaleDateString()}</span>
+                  <span className="text-sm">Joined {profile.createdAt?.toDate()?.toLocaleDateString() || 'تاريخ غير معروف'}</span>
                 </div>
               </div>
             </div>

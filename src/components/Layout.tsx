@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
-import { LogIn, LogOut, LayoutDashboard, PlusCircle, Library, Home as HomeIcon, AlertCircle, Shield, History, User, Brain, Menu, X } from 'lucide-react';
+import { LogIn, LogOut, LayoutDashboard, PlusCircle, Library, Home as HomeIcon, AlertCircle, Shield, History, User, Brain, Menu, X, CheckSquare } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -15,6 +15,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     { name: 'Home', path: '/', icon: HomeIcon },
     { name: 'Quiz Builder', path: '/builder', icon: PlusCircle, protected: true },
     { name: 'My Quizzes', path: '/library', icon: Library, protected: true },
+    { name: 'Tasks', path: '/tasks', icon: CheckSquare, protected: true },
     { name: 'History', path: '/history', icon: History, protected: true },
     { name: 'Profile', path: '/profile', icon: User, protected: true },
     { name: 'Admin', path: '/admin', icon: Shield, protected: true, adminOnly: true },

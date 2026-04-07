@@ -56,6 +56,20 @@
         "completedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["quizId", "userId", "score", "totalQuestions"]
+    },
+    "Todo": {
+      "title": "Todo",
+      "description": "A study task or reminder for the user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "text": { "type": "string" },
+        "completed": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "priority": { "type": "string", "enum": ["low", "medium", "high"] }
+      },
+      "required": ["userId", "text", "completed"]
     }
   },
   "firestore": {
@@ -70,6 +84,10 @@
     "/results/{resultId}": {
       "schema": "Result",
       "description": "Quiz attempt results"
+    },
+    "/todos/{todoId}": {
+      "schema": "Todo",
+      "description": "User tasks and reminders"
     }
   }
 }

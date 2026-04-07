@@ -1,6 +1,16 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+const getApiKey = () => {
+  // Try multiple sources for the API key
+  // In Vite, process.env.GEMINI_API_KEY is replaced by the value in vite.config.ts
+  const key = (process.env.GEMINI_API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY) || '';
+  
+  if (!key || key === 'MY_GEMINI_API_KEY' || key === 'undefined' || key === 'null') {
+    console.error('GEMINI_API_KEY is missing or invalid. Current value:', key);
+    return '';
+  }
+  return key;
+};
 
 export interface GeneratedQuestion {
   type: 'multiple-choice';
@@ -28,6 +38,12 @@ export interface QuizGenerationResponse {
 }
 
 export const generateQuizFromContent = async (params: QuizGenerationParams): Promise<QuizGenerationResponse> => {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    throw new Error("تنبيه: مفتاح Gemini API غير متوفر. يرجى إضافته في لوحة Secrets في AI Studio.");
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
   const { content, image, numQuestions, language, difficulty } = params;
 
   if (!content && !image) {
@@ -87,7 +103,7 @@ export const generateQuizFromContent = async (params: QuizGenerationParams): Pro
   const executeGeneration = async (): Promise<QuizGenerationResponse> => {
     try {
       const response = await ai.models.generateContent({
-        model: "gemini-3.1-pro-preview",
+        model: "gemini-3-flash-preview",
         contents: contents,
         config: {
           systemInstruction: "You are a strict MCQ quiz generator that performs deep content analysis first. You ONLY use the provided context to create questions. You never hallucinate or use outside knowledge. You only output Multiple Choice Questions.",

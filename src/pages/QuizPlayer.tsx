@@ -3,9 +3,10 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { doc, getDoc, collection, addDoc, Timestamp } from 'firebase/firestore';
-import { ChevronLeft, ChevronRight, Clock, AlertCircle, CheckCircle2, XCircle, Send, LogOut, Headphones, Pause, Play } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Clock, AlertCircle, CheckCircle2, XCircle, Send, LogOut, Headphones, Pause, Play, Bookmark } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import FocusMusicPlayer from '../components/FocusMusicPlayer';
+import ConfirmModal from '../components/ConfirmModal';
 
 interface Question {
   type: 'multiple-choice' | 'true-false' | 'short-answer';
@@ -30,6 +31,7 @@ const QuizPlayer: React.FC = () => {
   const [quiz, setQuiz] = useState<Quiz | null>(null);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [userAnswers, setUserAnswers] = useState<string[]>([]);
+  const [markedQuestions, setMarkedQuestions] = useState<Set<number>>(new Set());
   const [timeLeft, setTimeLeft] = useState<number>(0);
   const [isTimerPaused, setIsTimerPaused] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
@@ -56,6 +58,10 @@ const QuizPlayer: React.FC = () => {
         if (document.activeElement?.tagName !== 'INPUT') {
           e.preventDefault();
           setIsTimerPaused(prev => !prev);
+        }
+      } else if (e.key.toLowerCase() === 'm') {
+        if (document.activeElement?.tagName !== 'INPUT') {
+          toggleMarkQuestion(currentQuestionIndex);
         }
       }
     };
@@ -125,6 +131,18 @@ const QuizPlayer: React.FC = () => {
     setUserAnswers(newAnswers);
   };
 
+  const toggleMarkQuestion = (index: number) => {
+    setMarkedQuestions(prev => {
+      const next = new Set(prev);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
+  };
+
   const handleFinish = async () => {
     if (!quiz || !user) return;
     setIsFinished(true);
@@ -132,12 +150,13 @@ const QuizPlayer: React.FC = () => {
 
     let score = 0;
     quiz.questions.forEach((q, i) => {
+      const userAnswer = userAnswers[i] || '';
       if (q.type === 'short-answer') {
-        if (userAnswers[i].toLowerCase().trim() === q.correctAnswer.toLowerCase().trim()) {
+        if (userAnswer.toLowerCase().trim() === q.correctAnswer.toLowerCase().trim()) {
           score++;
         }
       } else {
-        if (userAnswers[i] === q.correctAnswer) {
+        if (userAnswer === q.correctAnswer) {
           score++;
         }
       }
@@ -149,15 +168,19 @@ const QuizPlayer: React.FC = () => {
         userId: user.uid,
         score,
         totalQuestions: quiz.questions.length,
-        answers: userAnswers.map((ans, i) => ({
-          question: quiz.questions[i].questionText,
-          userAnswer: ans,
-          correctAnswer: quiz.questions[i].correctAnswer,
-          isCorrect: quiz.questions[i].type === 'short-answer' 
-            ? ans.toLowerCase().trim() === quiz.questions[i].correctAnswer.toLowerCase().trim()
-            : ans === quiz.questions[i].correctAnswer,
-          feedback: quiz.questions[i].feedback
-        })),
+        answers: quiz.questions.map((q, i) => {
+          const ans = userAnswers[i] || '';
+          return {
+            question: q.questionText,
+            userAnswer: ans,
+            correctAnswer: q.correctAnswer,
+            isCorrect: q.type === 'short-answer' 
+              ? ans.toLowerCase().trim() === q.correctAnswer.toLowerCase().trim()
+              : ans === q.correctAnswer,
+            feedback: q.feedback,
+            isMarked: markedQuestions.has(i)
+          };
+        }),
         completedAt: Timestamp.now(),
       };
 
@@ -175,9 +198,17 @@ const QuizPlayer: React.FC = () => {
   };
 
   if (loading) return <div className="flex items-center justify-center min-h-[60vh]"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div></div>;
-  if (!quiz) return null;
+  if (!quiz || !quiz.questions || quiz.questions.length === 0) return (
+    <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4">
+      <AlertCircle className="w-12 h-12 text-red-500" />
+      <h2 className="text-xl font-bold text-gray-900">عذراً، لم يتم العثور على أسئلة لهذا الكويز.</h2>
+      <button onClick={() => navigate('/library')} className="px-6 py-2 bg-indigo-600 text-white rounded-xl">العودة للمكتبة</button>
+    </div>
+  );
 
   const currentQuestion = quiz.questions[currentQuestionIndex];
+  if (!currentQuestion) return null;
+  
   const progress = ((currentQuestionIndex + 1) / quiz.questions.length) * 100;
 
   return (
@@ -199,19 +230,21 @@ const QuizPlayer: React.FC = () => {
             <p className="text-[10px] sm:text-sm text-gray-500">السؤال {currentQuestionIndex + 1} من {quiz.questions.length}</p>
           </div>
         </div>
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={() => setIsTimerPaused(!isTimerPaused)}
-            className={`p-2 rounded-xl transition-all ${isTimerPaused ? 'bg-red-100 text-red-600' : 'bg-indigo-100 text-indigo-600 hover:bg-indigo-200'}`}
-            title={isTimerPaused ? 'استئناف الوقت' : 'إيقاف مؤقت'}
-          >
-            {isTimerPaused ? <Play className="w-4 h-4 sm:w-5 sm:h-5" /> : <Pause className="w-4 h-4 sm:w-5 sm:h-5" />}
-          </button>
-          <div className={`flex items-center px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl font-mono font-bold text-sm sm:text-lg ${timeLeft < 60 ? 'bg-red-50 text-red-600 animate-pulse' : 'bg-indigo-50 text-indigo-600'}`}>
-            <Clock className="w-4 h-4 sm:w-5 sm:h-5 mr-1.5 sm:mr-2" />
-            {formatTime(timeLeft)}
+        {quiz.timer > 0 && (
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => setIsTimerPaused(!isTimerPaused)}
+              className={`p-2 rounded-xl transition-all ${isTimerPaused ? 'bg-red-100 text-red-600' : 'bg-indigo-100 text-indigo-600 hover:bg-indigo-200'}`}
+              title={isTimerPaused ? 'استئناف الوقت' : 'إيقاف مؤقت'}
+            >
+              {isTimerPaused ? <Play className="w-4 h-4 sm:w-5 sm:h-5" /> : <Pause className="w-4 h-4 sm:w-5 sm:h-5" />}
+            </button>
+            <div className={`flex items-center px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl font-mono font-bold text-sm sm:text-lg ${timeLeft < 60 ? 'bg-red-50 text-red-600 animate-pulse' : 'bg-indigo-50 text-indigo-600'}`}>
+              <Clock className="w-4 h-4 sm:w-5 sm:h-5 mr-1.5 sm:mr-2" />
+              {formatTime(timeLeft)}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Question Navigation Bar */}
@@ -220,15 +253,18 @@ const QuizPlayer: React.FC = () => {
           <button
             key={i}
             onClick={() => setCurrentQuestionIndex(i)}
-            className={`w-10 h-10 rounded-lg font-bold text-sm transition-all ${
+            className={`w-10 h-10 rounded-lg font-bold text-sm transition-all relative ${
               currentQuestionIndex === i
                 ? 'bg-indigo-600 text-white shadow-md scale-110'
-                : userAnswers[i] !== ''
+                : (userAnswers[i] !== undefined && userAnswers[i] !== '')
                 ? 'bg-indigo-100 text-indigo-600'
                 : 'bg-white text-gray-400 border border-gray-100 hover:bg-gray-50'
             }`}
           >
             {i + 1}
+            {markedQuestions.has(i) && (
+              <div className="absolute -top-1 -right-1 w-3 h-3 bg-amber-500 rounded-full border-2 border-white shadow-sm" />
+            )}
           </button>
         ))}
       </div>
@@ -240,15 +276,28 @@ const QuizPlayer: React.FC = () => {
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: -20 }}
-          className="bg-white p-6 sm:p-8 rounded-3xl border border-gray-100 shadow-lg space-y-6 sm:space-y-8"
+          className="bg-white p-6 sm:p-8 rounded-3xl border border-gray-100 shadow-lg space-y-6 sm:space-y-8 relative overflow-hidden"
         >
-          <div className="space-y-3 sm:space-y-4">
-            <span className="inline-flex items-center px-3 py-1 rounded-full text-[10px] sm:text-xs font-bold bg-indigo-50 text-indigo-600 uppercase tracking-wider">
-              {currentQuestion.type.replace('-', ' ')}
-            </span>
-            <h2 className="text-xl sm:text-2xl font-bold text-gray-900 leading-tight">
-              {currentQuestion.questionText}
-            </h2>
+          <div className="flex justify-between items-start">
+            <div className="space-y-3 sm:space-y-4">
+              <span className="inline-flex items-center px-3 py-1 rounded-full text-[10px] sm:text-xs font-bold bg-indigo-50 text-indigo-600 uppercase tracking-wider">
+                {currentQuestion.type.replace('-', ' ')}
+              </span>
+              <h2 className="text-xl sm:text-2xl font-bold text-gray-900 leading-tight">
+                {currentQuestion.questionText}
+              </h2>
+            </div>
+            <button
+              onClick={() => toggleMarkQuestion(currentQuestionIndex)}
+              className={`p-2 rounded-xl transition-all ${
+                markedQuestions.has(currentQuestionIndex)
+                  ? 'bg-amber-100 text-amber-600 shadow-inner'
+                  : 'bg-gray-50 text-gray-400 hover:bg-gray-100 hover:text-gray-600'
+              }`}
+              title="تعليم السؤال للمراجعة (M)"
+            >
+              <Bookmark className={`w-5 h-5 sm:w-6 sm:h-6 ${markedQuestions.has(currentQuestionIndex) ? 'fill-current' : ''}`} />
+            </button>
           </div>
 
           <div className="space-y-3 sm:space-y-4">
@@ -342,40 +391,16 @@ const QuizPlayer: React.FC = () => {
       </div>
 
       {/* Exit Confirmation Modal */}
-      <AnimatePresence>
-        {showExitConfirm && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-white p-8 rounded-3xl max-w-md w-full shadow-2xl text-center space-y-6"
-            >
-              <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto">
-                <AlertCircle className="w-8 h-8" />
-              </div>
-              <div className="space-y-2">
-                <h3 className="text-2xl font-bold text-gray-900">الخروج من الكويز؟</h3>
-                <p className="text-gray-600">هل تريد الخروج قبل إتمام الكويز؟ لن يتم حفظ تقدمك.</p>
-              </div>
-              <div className="flex gap-4">
-                <button
-                  onClick={() => setShowExitConfirm(false)}
-                  className="flex-1 px-6 py-3 bg-gray-100 text-gray-700 rounded-xl font-semibold hover:bg-gray-200 transition-all"
-                >
-                  البقاء
-                </button>
-                <button
-                  onClick={() => navigate('/library')}
-                  className="flex-1 px-6 py-3 bg-red-600 text-white rounded-xl font-semibold hover:bg-red-700 transition-all"
-                >
-                  الخروج
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <ConfirmModal
+        isOpen={showExitConfirm}
+        onClose={() => setShowExitConfirm(false)}
+        onConfirm={() => navigate('/library')}
+        title="الخروج من الكويز؟"
+        message="هل تريد الخروج قبل إتمام الكويز؟ لن يتم حفظ تقدمك."
+        confirmText="الخروج"
+        cancelText="البقاء"
+        type="danger"
+      />
     </div>
   );
 };

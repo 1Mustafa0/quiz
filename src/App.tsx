@@ -10,6 +10,7 @@ import QuizResult from './pages/QuizResult';
 import AdminDashboard from './pages/AdminDashboard';
 import QuizHistory from './pages/QuizHistory';
 import Profile from './pages/Profile';
+import TodoList from './pages/TodoList';
 import WelcomeModal from './components/WelcomeModal';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -96,6 +97,14 @@ export default function App() {
               element={
                 <ProtectedRoute>
                   <Profile />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/tasks"
+              element={
+                <ProtectedRoute>
+                  <TodoList />
                 </ProtectedRoute>
               }
             />
