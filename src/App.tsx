@@ -6,6 +6,8 @@ import Layout from './components/Layout';
 import Home from './pages/Home';
 import QuizBuilder from './pages/QuizBuilder';
 import QuizLibrary from './pages/QuizLibrary';
+import MindMapBuilder from './pages/MindMapBuilder';
+import MindMapLibrary from './pages/MindMapLibrary';
 import QuizPlayer from './pages/QuizPlayer';
 import QuizResult from './pages/QuizResult';
 import AdminDashboard from './pages/AdminDashboard';
@@ -126,6 +128,22 @@ export default function App() {
               element={
                 <ProtectedRoute>
                   <AdminDashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/mindmaps"
+              element={
+                <ProtectedRoute>
+                  <MindMapLibrary />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/mindmaps/builder"
+              element={
+                <ProtectedRoute>
+                  <MindMapBuilder />
                 </ProtectedRoute>
               }
             />

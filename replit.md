@@ -1,6 +1,6 @@
 # Project Overview
 
-This is a React + Vite + Express application cloned from Google AI Studio. It uses Firebase for authentication and Firestore database, and integrates with Gemini AI for AI-powered features.
+**AI Quiz Master** — A React + Vite + Express app that transforms uploaded documents into AI-powered quizzes and mind maps using Gemini AI and Firebase.
 
 ## Architecture
 

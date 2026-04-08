@@ -17,6 +17,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     { name: 'Home', path: '/', icon: HomeIcon },
     { name: 'Quiz Builder', path: '/builder', icon: PlusCircle, protected: true },
     { name: 'My Quizzes', path: '/library', icon: Library, protected: true },
+    { name: 'Mind Maps', path: '/mindmaps', icon: Brain, protected: true },
     { name: 'Tasks', path: '/tasks', icon: CheckSquare, protected: true },
     { name: 'History', path: '/history', icon: History, protected: true },
     { name: 'Profile', path: '/profile', icon: User, protected: true },
@@ -57,7 +58,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 {navItems.map((item) => {
                   if (item.protected && !user) return null;
                   if (item.adminOnly && role !== 'admin') return null;
-                  const isActive = location.pathname === item.path;
+                  const isActive = location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(item.path));
                   return (
                     <button
                       key={item.name}
@@ -150,7 +151,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 {navItems.map((item) => {
                   if (item.protected && !user) return null;
                   if (item.adminOnly && role !== 'admin') return null;
-                  const isActive = location.pathname === item.path;
+                  const isActive = location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(item.path));
                   return (
                     <button
                       key={item.name}

@@ -195,6 +195,17 @@ service cloud.firestore {
       allow update: if isAuthenticated() && resource.data.userId == request.auth.uid && isValidTodo(request.resource.data);
     }
 
+    // Mind Maps Collection
+    match /mindmaps/{mapId} {
+      allow read: if isAuthenticated() && (resource.data.authorUid == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() &&
+                    request.resource.data.keys().hasAll(['topic', 'title', 'category', 'data', 'authorUid', 'createdAt']) &&
+                    request.resource.data.authorUid == request.auth.uid &&
+                    request.resource.data.topic is string &&
+                    request.resource.data.createdAt is timestamp;
+      allow update, delete: if isAuthenticated() && (resource.data.authorUid == request.auth.uid || isAdmin());
+    }
+
     // Visitors Collection — open write for anonymous tracking, admin-only read
     match /visitors/{sessionId} {
       allow create: if request.resource.data.keys().hasAll(['sessionId', 'firstVisit', 'lastVisit', 'visitCount']) &&

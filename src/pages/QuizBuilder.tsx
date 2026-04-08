@@ -7,6 +7,7 @@ import { generateQuizFromContent, GeneratedQuestion } from '../services/geminiSe
 import { Upload, FileText, Plus, Trash2, Save, Sparkles, Loader2, AlertCircle, CheckCircle2, ArrowLeft, Pencil } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ConfirmModal from '../components/ConfirmModal';
+import CategorySelect from '../components/CategorySelect';
 
 const QuestionEditor: React.FC<{
   question: GeneratedQuestion;
@@ -659,13 +660,7 @@ const QuizBuilder: React.FC = () => {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
-                    <input
-                      type="text"
-                      value={category}
-                      onChange={(e) => setCategory(e.target.value)}
-                      placeholder="e.g., Science"
-                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all"
-                    />
+                    <CategorySelect value={category} onChange={setCategory} sourceType="quiz" placeholder="e.g., Science" />
                   </div>
                   <div>
                     <div className="flex items-center justify-between mb-1">
@@ -850,13 +845,7 @@ const QuizBuilder: React.FC = () => {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
-                    <input
-                      type="text"
-                      value={category}
-                      onChange={(e) => setCategory(e.target.value)}
-                      placeholder="e.g., Science"
-                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all"
-                    />
+                    <CategorySelect value={category} onChange={setCategory} sourceType="quiz" placeholder="e.g., Science" />
                   </div>
                   <div>
                     <div className="flex items-center justify-between mb-1">
