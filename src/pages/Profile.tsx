@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Navigate, Link } from 'react-router-dom';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
 import { User, Mail, Calendar, Award, BookOpen, BarChart2, Copy, Check, Shield, ExternalLink, Crown } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useAuth } from '../AuthContext';
@@ -46,9 +46,23 @@ const Profile: React.FC = () => {
       setLoading(true);
       try {
         // Fetch User Profile
-        const userDoc = await getDoc(doc(db, 'users', targetUid));
+        const userRef = doc(db, 'users', targetUid);
+        const userDoc = await getDoc(userRef);
+
         if (userDoc.exists()) {
           setProfile({ uid: userDoc.id, ...userDoc.data() } as UserProfile);
+        } else if (currentUser && currentUser.uid === targetUid) {
+          // Self-healing: create the profile doc if this is the current user's own profile
+          const newProfile = {
+            uid: currentUser.uid,
+            email: currentUser.email || '',
+            displayName: currentUser.displayName || '',
+            photoURL: currentUser.photoURL || null,
+            role: currentUser.email === OWNER_EMAIL ? 'admin' : 'user',
+            createdAt: Timestamp.now(),
+          };
+          await setDoc(userRef, newProfile).catch(() => {});
+          setProfile({ ...newProfile } as UserProfile);
         }
 
         // Fetch Quizzes Created

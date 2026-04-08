@@ -1,7 +1,9 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { auth, loginWithGoogle, logout, db, handleFirestoreError, OperationType } from './firebase';
+import { auth, loginWithGoogle, logout, db } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { doc, getDoc, setDoc, updateDoc, Timestamp } from 'firebase/firestore';
+
+const OWNER_EMAIL = 'mstfyalswdany913@gmail.com';
 
 interface AuthContextType {
   user: User | null;
@@ -25,66 +27,59 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [showWelcome, setShowWelcome] = useState(false);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (user) {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        const isOwner = firebaseUser.email === OWNER_EMAIL;
+        let userRole: string = isOwner ? 'admin' : 'user';
+
         try {
-          // Fetch role from Firestore
-          let userDoc;
-          try {
-            userDoc = await getDoc(doc(db, 'users', user.uid));
-          } catch (error) {
-            handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
-          }
-          
-          let userRole = 'user';
-          
+          const userRef = doc(db, 'users', firebaseUser.uid);
+          const userDoc = await getDoc(userRef).catch(() => null);
+
           if (userDoc && userDoc.exists()) {
-            userRole = userDoc.data().role || 'user';
-            // Ensure the specific email always gets admin role if not already set
-            if (user.email === 'mstfyalswdany913@gmail.com' && userRole !== 'admin') {
-              userRole = 'admin';
-              try {
-                await updateDoc(doc(db, 'users', user.uid), { role: 'admin' });
-              } catch (error) {
-                handleFirestoreError(error, OperationType.UPDATE, `users/${user.uid}`);
-              }
+            const data = userDoc.data();
+            userRole = isOwner ? 'admin' : (data.role || 'user');
+
+            if (isOwner && data.role !== 'admin') {
+              updateDoc(userRef, { role: 'admin' }).catch(() => {});
             }
           } else {
-            // Create user doc if it doesn't exist
-            userRole = user.email === 'mstfyalswdany913@gmail.com' ? 'admin' : 'user';
-            try {
-              await setDoc(doc(db, 'users', user.uid), {
-                uid: user.uid,
-                email: user.email,
-                displayName: user.displayName,
-                photoURL: user.photoURL,
-                role: userRole,
-                createdAt: Timestamp.now()
-              });
-            } catch (error) {
-              handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}`);
-            }
+            // New user — create profile document
+            const newProfile = {
+              uid: firebaseUser.uid,
+              email: firebaseUser.email || '',
+              displayName: firebaseUser.displayName || '',
+              photoURL: firebaseUser.photoURL || null,
+              role: userRole,
+              createdAt: Timestamp.now(),
+            };
+
+            await setDoc(userRef, newProfile).catch((err) => {
+              console.error('Failed to create user profile:', err);
+            });
+
             setShowWelcome(true);
           }
-          console.log('User role:', userRole);
-          setRole(userRole);
-        } catch (error) {
-          console.error('Error fetching user role:', error);
-          setRole('user');
+        } catch (err) {
+          console.error('Auth profile error:', err);
         }
+
+        setRole(userRole);
       } else {
         setRole(null);
       }
-      setUser(user);
+
+      setUser(firebaseUser);
       setLoading(false);
     });
+
     return unsubscribe;
   }, []);
 
   const login = async () => {
-    const user = await loginWithGoogle();
-    setUser(user);
-    return user;
+    const u = await loginWithGoogle();
+    setUser(u);
+    return u;
   };
 
   const handleLogout = async () => {
@@ -94,16 +89,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ 
-      user, 
-      role, 
-      loading, 
-      isQuizActive, 
-      setIsQuizActive, 
+    <AuthContext.Provider value={{
+      user,
+      role,
+      loading,
+      isQuizActive,
+      setIsQuizActive,
       showWelcome,
       setShowWelcome,
-      login, 
-      logout: handleLogout 
+      login,
+      logout: handleLogout,
     }}>
       {children}
     </AuthContext.Provider>
