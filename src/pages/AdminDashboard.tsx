@@ -107,7 +107,7 @@ const AdminDashboard: React.FC = () => {
         newUsersWeek: newWeek,
       }));
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'users');
+      console.error('Admin: failed to listen to users collection:', error.message);
     });
 
     const quizzesUnsubscribe = onSnapshot(collection(db, 'quizzes'), (snapshot) => {
@@ -118,7 +118,8 @@ const AdminDashboard: React.FC = () => {
       setQuizzes(quizList);
       setLoading(false);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'quizzes');
+      console.error('Admin: failed to listen to quizzes collection:', error.message);
+      setLoading(false);
     });
 
     // Fetch visitor stats

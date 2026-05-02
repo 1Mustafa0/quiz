@@ -14,20 +14,6 @@ export const loginWithGoogle = async () => {
   try {
     const result = await signInWithPopup(auth, googleProvider);
     const user = result.user;
-
-    // Sync user to firestore
-    try {
-      await setDoc(doc(db, 'users', user.uid), {
-        uid: user.uid,
-        email: user.email,
-        displayName: user.displayName,
-        photoURL: user.photoURL,
-        role: 'user',
-        createdAt: Timestamp.now()
-      }, { merge: true });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}`);
-    }
     return user;
   } catch (error: any) {
     console.error('Login error:', error);

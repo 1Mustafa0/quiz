@@ -40,8 +40,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const data = userDoc.data();
             userRole = isOwner ? 'admin' : (data.role || 'user');
 
-            if (isOwner && data.role !== 'admin') {
-              updateDoc(userRef, { role: 'admin' }).catch(() => {});
+            const updates: Record<string, string | null> = {};
+            if (firebaseUser.email && data.email !== firebaseUser.email) updates.email = firebaseUser.email;
+            if (firebaseUser.displayName && data.displayName !== firebaseUser.displayName) updates.displayName = firebaseUser.displayName;
+            if (data.photoURL !== (firebaseUser.photoURL || null)) updates.photoURL = firebaseUser.photoURL || null;
+            if (isOwner && data.role !== 'admin') updates.role = 'admin';
+
+            if (Object.keys(updates).length > 0) {
+              updateDoc(userRef, updates).catch(() => {});
             }
           } else {
             // New user — create profile document
