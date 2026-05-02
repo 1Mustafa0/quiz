@@ -200,12 +200,15 @@ const QuizBuilder: React.FC = () => {
   };
 
   const autoSaveAndPlay = async (generated: any) => {
-    if (!user) return;
+    if (!user) {
+      setError('يجب تسجيل الدخول أولاً لحفظ الكويز.');
+      return;
+    }
     setIsSaving(true);
     try {
       const quizData = {
         title: generated.title || 'AI Generated Quiz',
-        description: generated.description || '',
+        description: (generated.description || '').substring(0, 900),
         category: category || 'General',
         difficulty,
         timer,
@@ -215,13 +218,18 @@ const QuizBuilder: React.FC = () => {
       };
 
       const docRef = await addDoc(collection(db, 'quizzes'), quizData);
-      setSuccess('صل على النبي بقا');
+      setSuccess('تم إنشاء الكويز بنجاح! جاري الانتقال للعب...');
       setTimeout(() => {
         navigate(`/play/${docRef.id}`);
-      }, 2000);
+      }, 1500);
     } catch (err: any) {
       console.error('Auto-save failed:', err);
-      setError('فشل حفظ الكويز تلقائياً. يرجى المحاولة يدوياً.');
+      const isPermission = err?.message?.includes('permission') || err?.code === 'permission-denied';
+      if (isPermission) {
+        setError('لا تملك صلاحية الحفظ. يرجى التأكد من نشر قواعد Firestore أو التواصل مع المشرف. يمكنك مشاهدة الأسئلة أدناه والحفظ اليدوي لاحقاً.');
+      } else {
+        setError(`فشل الحفظ التلقائي: ${err?.message || 'خطأ غير معروف'}. يمكنك الضغط على "Save Quiz" للحفظ اليدوي.`);
+      }
     } finally {
       setIsSaving(false);
     }
@@ -469,17 +477,9 @@ const QuizBuilder: React.FC = () => {
           createdAt: Timestamp.now(),
         };
 
-        let docRef;
-        try {
-          docRef = await addDoc(collection(db, 'quizzes'), quizData);
-        } catch (error) {
-          handleFirestoreError(error, OperationType.CREATE, 'quizzes');
-        }
-
-        if (docRef) {
-          setSuccess('Quiz saved successfully! Redirecting to your library...');
-          setTimeout(() => navigate('/library'), 1500);
-        }
+        await addDoc(collection(db, 'quizzes'), quizData);
+        setSuccess('تم حفظ الكويز بنجاح! جاري الانتقال...');
+        setTimeout(() => navigate('/library'), 1500);
       }
     } catch (err: any) {
       console.error('Failed to save quiz:', err);
@@ -610,14 +610,14 @@ const QuizBuilder: React.FC = () => {
                 <CheckCircle2 className="w-10 h-10" />
               </div>
               <div className="space-y-2">
-                <h3 className="text-2xl font-bold text-gray-900">تم الاستيراد</h3>
-                <p className="text-2xl text-indigo-600 font-bold">{success}</p>
+                <h3 className="text-2xl font-bold text-gray-900">تم بنجاح</h3>
+                <p className="text-lg text-indigo-600 font-bold">{success}</p>
               </div>
               <button
                 onClick={() => setSuccess(null)}
                 className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
               >
-                استمرار
+                حسناً
               </button>
             </motion.div>
           </div>

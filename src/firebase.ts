@@ -135,7 +135,7 @@ export async function trackVisit(uid?: string): Promise<void> {
           visitCount: 1,
           isRegistered: !!uid,
           ...(uid ? { uid } : {}),
-        });
+        }).catch(() => {});
       });
     }
   } catch (e) {
