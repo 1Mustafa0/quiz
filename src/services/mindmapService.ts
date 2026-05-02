@@ -29,7 +29,7 @@ async function callGemini(prompt: string): Promise<MindMapData> {
     const ai = new GoogleGenAI({ apiKey });
     try {
       const response = await ai.models.generateContent({
-        model: 'gemini-2.0-flash',
+        model: 'gemini-3-flash-preview',
         contents: [{ parts: [{ text: prompt }] }],
         config: { responseMimeType: 'application/json' },
       });
