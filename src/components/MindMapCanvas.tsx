@@ -24,14 +24,25 @@ interface LayoutNode {
 /* ─── Geometry ───────────────────────────────────────────────────── */
 function nodeGeo(depth: number) {
   return [
-    { w: 200, h: 62, rx: 31 },
-    { w: 162, h: 48, rx: 24 },
-    { w: 144, h: 38, rx: 9 },
-    { w: 126, h: 30, rx: 7 },
-    { w: 110, h: 26, rx: 6 },
+    { w: 220, h: 70, rx: 35 },  // root
+    { w: 178, h: 58, rx: 29 },  // branch
+    { w: 158, h: 50, rx: 10 },  // child
+    { w: 140, h: 42, rx: 8 },   // gc
+    { w: 124, h: 36, rx: 6 },   // ggc
   ][Math.min(depth, 4)];
 }
-function nodeFSize(depth: number) { return [16, 13, 11.5, 10.5, 10][Math.min(depth, 4)]; }
+function nodeFSize(depth: number) { return [15, 12.5, 11, 10.5, 10][Math.min(depth, 4)]; }
+
+/* Text padding per depth: { l, r, t, b } — accounts for decorations */
+function nodePad(depth: number) {
+  return [
+    { l: 14, r: 14, t: 10, b: 10 }, // root
+    { l: 22, r: 14, t: 12, b: 8 },  // branch (top accent + left dot)
+    { l: 16, r: 10, t: 7,  b: 7 },  // child (left bar)
+    { l: 10, r: 10, t: 6,  b: 6 },  // gc
+    { l: 8,  r: 8,  t: 5,  b: 5 },  // ggc
+  ][Math.min(depth, 4)];
+}
 
 /* ─── Leaf count for proportional layout ────────────────────────── */
 function countLeaves(node: { children?: { children?: any[] }[] }): number {
@@ -48,19 +59,6 @@ function computeRadii(data: MindMapData) {
   return [0, R1, R2, R2 + 250, R2 + 480];
 }
 
-/* ─── Text wrapping ──────────────────────────────────────────────── */
-function wrap(text: string, max: number): string[] {
-  if (text.length <= max) return [text];
-  const words = text.split(' ');
-  const lines: string[] = [];
-  let cur = '';
-  for (const w of words) {
-    if (!cur) { cur = w; continue; }
-    (cur + ' ' + w).length <= max ? (cur += ' ' + w) : (lines.push(cur), cur = w);
-  }
-  if (cur) lines.push(cur);
-  return lines.slice(0, 3);
-}
 
 /* ─── Full layout (all nodes, not filtered) ──────────────────────── */
 function computeLayout(data: MindMapData): LayoutNode[] {
@@ -500,6 +498,7 @@ const MindMapCanvas: React.FC<Props> = ({ data, onDataChange, height = '680px' }
           {/* Nodes */}
           {nodes.map(n => {
             const { w, h, rx } = nodeGeo(n.depth);
+            const pad = nodePad(n.depth);
             const isSel = selId === n.id;
             const isEdit = editId === n.id;
             const isRoot = n.depth === 0;
@@ -508,10 +507,17 @@ const MindMapCanvas: React.FC<Props> = ({ data, onDataChange, height = '680px' }
             const hasKids = hasChildrenSet.has(n.id);
             const kCount = childCount.get(n.id) ?? 0;
             const fs = nodeFSize(n.depth);
-            const lines = wrap(n.label, isRoot ? 22 : n.depth === 1 ? 16 : 14);
-            const lh = fs + 4.5;
             const palIdx = PALETTE.findIndex(p => p.base === n.base);
             const filterAttr = isRoot ? 'url(#rglow)' : isBranch && palIdx >= 0 ? `url(#pg${palIdx})` : isSel ? 'url(#sglow)' : undefined;
+
+            /* text area inside the node */
+            const foX = -w / 2 + pad.l;
+            const foY = -h / 2 + pad.t;
+            const foW = w - pad.l - pad.r;
+            const foH = h - pad.t - pad.b;
+
+            const textColor = isRoot ? 'white' : n.depth === 1 ? n.text : n.depth === 2 ? '#1e293b' : '#374151';
+            const fontWeight = n.depth === 0 ? 800 : n.depth === 1 ? 700 : n.depth === 2 ? 600 : 500;
 
             return (
               <g key={n.id}
@@ -520,12 +526,13 @@ const MindMapCanvas: React.FC<Props> = ({ data, onDataChange, height = '680px' }
                 onMouseDown={e => onNodeMD(e, n.id)}
                 onClick={e => onNodeClick(e, n.id)}
                 onDoubleClick={e => onNodeDbl(e, n)}
-                style={{ cursor: hasKids && !isRoot ? 'pointer' : 'pointer' }}
+                style={{ cursor: 'pointer' }}
               >
                 {/* ROOT */}
                 {isRoot && <>
                   <rect x={-w/2-4} y={-h/2-4} width={w+8} height={h+8} rx={rx+4}
-                    fill="none" stroke="#a5b4fc" strokeWidth="1.5" strokeOpacity={isSel ? 0.9 : 0.45} strokeDasharray={isSel ? '0' : '6 4'}
+                    fill="none" stroke="#a5b4fc" strokeWidth="1.5"
+                    strokeOpacity={isSel ? 0.9 : 0.45} strokeDasharray={isSel ? '0' : '6 4'}
                   />
                   <rect x={-w/2} y={-h/2} width={w} height={h} rx={rx}
                     fill="url(#rg)" stroke={isSel ? '#c7d2fe' : '#4338ca'} strokeWidth={isSel ? 2.5 : 1.5}
@@ -555,7 +562,9 @@ const MindMapCanvas: React.FC<Props> = ({ data, onDataChange, height = '680px' }
                   <rect x={-w/2} y={-h/2} width={w} height={h} rx={rx}
                     fill="white" stroke={n.base} strokeWidth={isSel ? 2 : 1.2} strokeOpacity={isSel ? 0.85 : 0.45}
                   />
-                  <rect x={-w/2} y={-h/2+7} width={3.5} height={h-14} rx={1.75} fill={n.base} opacity={isSel ? 0.8 : 0.55} />
+                  <rect x={-w/2} y={-h/2+8} width={4} height={h-16} rx={2}
+                    fill={n.base} opacity={isSel ? 0.8 : 0.55}
+                  />
                 </>}
 
                 {/* GC+ */}
@@ -569,55 +578,82 @@ const MindMapCanvas: React.FC<Props> = ({ data, onDataChange, height = '680px' }
                   />
                 </>}
 
-                {/* Label or editor */}
-                {isEdit ? (
-                  <foreignObject x={-w/2+8} y={-h/2+4} width={w-16} height={h-8}>
-                    <div style={{ width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'center' }}>
-                      <input value={editVal}
+                {/* Text area — foreignObject for proper CSS wrapping */}
+                <foreignObject x={foX} y={foY} width={foW} height={foH}>
+                  <div
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      overflow: 'hidden',
+                      boxSizing: 'border-box',
+                    }}
+                  >
+                    {isEdit ? (
+                      <input
+                        value={editVal}
                         onChange={e => setEditVal(e.target.value)}
                         onBlur={commitEdit}
-                        onKeyDown={e => { e.stopPropagation(); if (e.key==='Enter') commitEdit(); if (e.key==='Escape') { setEditId(null); setEditVal(''); } }}
-                        onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
+                        onKeyDown={e => {
+                          e.stopPropagation();
+                          if (e.key === 'Enter') commitEdit();
+                          if (e.key === 'Escape') { setEditId(null); setEditVal(''); }
+                        }}
+                        onMouseDown={e => e.stopPropagation()}
+                        onClick={e => e.stopPropagation()}
                         autoFocus
-                        style={{ width:'100%', background:'transparent', border:'none', outline:'none', textAlign:'center', fontSize:`${fs}px`, fontWeight: n.depth<=1?700:600, color: isRoot?'white': n.depth===1?n.text:'#1e293b', fontFamily:'Inter, system-ui, -apple-system, sans-serif' }}
+                        style={{
+                          width: '100%',
+                          background: 'transparent',
+                          border: 'none',
+                          outline: 'none',
+                          textAlign: 'center',
+                          fontSize: `${fs}px`,
+                          fontWeight,
+                          color: textColor,
+                          fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
+                        }}
                       />
-                    </div>
-                  </foreignObject>
-                ) : (
-                  lines.map((line, li) => (
-                    <text key={li}
-                      x={n.depth===2 ? 4 : 0}
-                      y={(li-(lines.length-1)/2)*lh}
-                      textAnchor="middle" dominantBaseline="central"
-                      fontSize={fs}
-                      fontWeight={n.depth===0?800:n.depth===1?700:n.depth===2?600:500}
-                      letterSpacing={n.depth===0?'0.5':'0.1'}
-                      fill={isRoot?'white':n.depth===1?n.text:n.depth===2?'#1e293b':'#475569'}
-                      style={{ fontFamily:'Inter,system-ui,-apple-system,sans-serif', pointerEvents:'none', userSelect:'none', textRendering:'optimizeLegibility' }}
-                    >{line}</text>
-                  ))
-                )}
+                    ) : (
+                      <span
+                        style={{
+                          display: '-webkit-box',
+                          WebkitLineClamp: 3,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          textAlign: 'center',
+                          fontSize: `${fs}px`,
+                          fontWeight,
+                          color: textColor,
+                          lineHeight: 1.35,
+                          wordBreak: 'break-word',
+                          overflowWrap: 'break-word',
+                          hyphens: 'auto',
+                          fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
+                          pointerEvents: 'none',
+                          userSelect: 'none',
+                          letterSpacing: n.depth === 0 ? '0.3px' : '0.05px',
+                        }}
+                      >
+                        {n.label}
+                      </span>
+                    )}
+                  </div>
+                </foreignObject>
 
-                {/* Collapse/Expand badge (visible when node has children, non-root) */}
+                {/* Collapse/Expand badge */}
                 {hasKids && !isRoot && !isEdit && (
-                  <g
-                    transform={`translate(${w / 2 + 1}, 0)`}
-                    style={{ pointerEvents: 'none' }}
-                  >
-                    <circle
-                      r={10}
-                      fill={isCollapsed ? n.base : 'white'}
-                      stroke={n.base}
-                      strokeWidth={1.5}
-                      opacity={0.95}
-                    />
+                  <g transform={`translate(${w / 2 + 1}, 0)`} style={{ pointerEvents: 'none' }}>
+                    <circle r={11} fill={isCollapsed ? n.base : 'white'} stroke={n.base} strokeWidth={1.5} opacity={0.96} />
                     <text
-                      textAnchor="middle"
-                      dominantBaseline="central"
-                      fontSize={11}
+                      textAnchor="middle" dominantBaseline="central"
+                      fontSize={isCollapsed ? 9 : 13}
                       fontWeight={800}
                       fill={isCollapsed ? 'white' : n.base}
-                      style={{ fontFamily: 'monospace', userSelect: 'none' }}
+                      style={{ fontFamily: 'system-ui, monospace', userSelect: 'none' }}
                     >
                       {isCollapsed ? `+${kCount}` : '−'}
                     </text>
