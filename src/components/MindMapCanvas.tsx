@@ -2,30 +2,56 @@ import React, { useRef, useState, useCallback, useEffect, useMemo } from 'react'
 import { MindMapData } from '../services/mindmapService';
 import { ZoomIn, ZoomOut, Maximize2, MousePointer2, Plus, Pencil, Trash2 } from 'lucide-react';
 
-/* ─── palette ───────────────────────────────────────────────────── */
-const BRANCH_COLORS = [
-  { base: '#6366f1', light: '#eef2ff', text: '#4338ca' }, // indigo
-  { base: '#f59e0b', light: '#fffbeb', text: '#b45309' }, // amber
-  { base: '#10b981', light: '#ecfdf5', text: '#047857' }, // emerald
-  { base: '#ef4444', light: '#fef2f2', text: '#b91c1c' }, // red
-  { base: '#8b5cf6', light: '#f5f3ff', text: '#6d28d9' }, // violet
-  { base: '#06b6d4', light: '#ecfeff', text: '#0e7490' }, // cyan
-  { base: '#f97316', light: '#fff7ed', text: '#c2410c' }, // orange
-  { base: '#ec4899', light: '#fdf2f8', text: '#be185d' }, // pink
+/* ─── Harmonious palette (Tailwind-based) ────────────────────────── */
+const PALETTE = [
+  { base: '#6366f1', light: '#eef2ff', text: '#3730a3' }, // indigo
+  { base: '#f97316', light: '#fff7ed', text: '#9a3412' }, // orange
+  { base: '#10b981', light: '#ecfdf5', text: '#065f46' }, // emerald
+  { base: '#ec4899', light: '#fdf2f8', text: '#9d174d' }, // pink
+  { base: '#0ea5e9', light: '#f0f9ff', text: '#075985' }, // sky
+  { base: '#8b5cf6', light: '#f5f3ff', text: '#5b21b6' }, // violet
+  { base: '#14b8a6', light: '#f0fdfa', text: '#115e59' }, // teal
+  { base: '#f59e0b', light: '#fffbeb', text: '#78350f' }, // amber
 ];
-
-/* ─── layout constants ───────────────────────────────────────────── */
-const RADII = [0, 260, 455, 625, 780];
 
 interface LayoutNode {
   id: string; label: string; depth: number;
   x: number; y: number;
-  color: string; lightColor: string; textColor: string;
+  base: string; light: string; text: string;
   parentId: string | null;
 }
 
-/* ─── helpers ────────────────────────────────────────────────────── */
-function wrapLabel(text: string, max: number): string[] {
+/* ─── Node geometry ──────────────────────────────────────────────── */
+function nodeGeo(depth: number) {
+  return [
+    { w: 200, h: 62, rx: 31 },
+    { w: 162, h: 48, rx: 24 },
+    { w: 144, h: 38, rx: 9 },
+    { w: 126, h: 30, rx: 7 },
+    { w: 110, h: 26, rx: 6 },
+  ][Math.min(depth, 4)];
+}
+function nodeFSize(depth: number) { return [16, 13, 11.5, 10.5, 10][Math.min(depth, 4)]; }
+
+/* ─── Leaf counting (for proportional angle distribution) ────────── */
+function countLeaves(node: { children?: { children?: any[] }[] }): number {
+  if (!node.children || node.children.length === 0) return 1;
+  return node.children.reduce((s, c) => s + countLeaves(c), 0);
+}
+
+/* ─── Dynamic radii (prevents overlap for varying tree sizes) ────── */
+function computeRadii(data: MindMapData) {
+  const N = Math.max(1, data.branches.length);
+  const totalLeaves = Math.max(N, data.branches.reduce((s, b) => s + countLeaves(b), 0));
+  const R1 = Math.max(270, Math.ceil(N * 196 / (2 * Math.PI)));
+  const R2 = Math.min(Math.max(R1 + 250, Math.ceil(totalLeaves * 158 / (2 * Math.PI))), 960);
+  const R3 = R2 + 250;
+  const R4 = R3 + 230;
+  return [0, R1, R2, R3, R4];
+}
+
+/* ─── Label wrapping ─────────────────────────────────────────────── */
+function wrap(text: string, max: number): string[] {
   if (text.length <= max) return [text];
   const words = text.split(' ');
   const lines: string[] = [];
@@ -38,89 +64,97 @@ function wrapLabel(text: string, max: number): string[] {
   return lines.slice(0, 3);
 }
 
-function nodeSize(depth: number) {
-  return [
-    { w: 210, h: 66, rx: 33 },
-    { w: 168, h: 50, rx: 25 },
-    { w: 148, h: 40, rx: 10 },
-    { w: 130, h: 32, rx: 8 },
-    { w: 112, h: 28, rx: 6 },
-  ][Math.min(depth, 4)];
-}
-
-function nodeFontSize(depth: number) {
-  return [16, 13, 11.5, 10.5, 10][Math.min(depth, 4)];
-}
-
-/* ─── layout ─────────────────────────────────────────────────────── */
+/* ─── Layout: leaf-proportional angle distribution ───────────────── */
 function computeLayout(data: MindMapData): LayoutNode[] {
+  const R = computeRadii(data);
   const all: LayoutNode[] = [];
-  all.push({ id: 'root', label: data.topic, depth: 0, x: 0, y: 0, color: '#4f46e5', lightColor: '#eef2ff', textColor: '#ffffff', parentId: null });
+  all.push({ id: 'root', label: data.topic, depth: 0, x: 0, y: 0, base: '#4f46e5', light: '#eef2ff', text: '#ffffff', parentId: null });
 
-  const N = data.branches.length || 1;
-  const startAngle = -Math.PI / 2;
+  const N = data.branches.length;
+  if (N === 0) return all;
+
+  const bLeaves = data.branches.map(b => countLeaves(b));
+  const totalLeaves = bLeaves.reduce((s, l) => s + l, 0) || N;
+
+  let aSector = -Math.PI / 2; // running sector start
 
   data.branches.forEach((branch, i) => {
-    const pal = BRANCH_COLORS[i % BRANCH_COLORS.length];
-    const baseAngle = startAngle + (2 * Math.PI * i) / N;
-    const sectorHalf = Math.PI / N;
+    const pal = PALETTE[i % PALETTE.length];
+    const bSize = (2 * Math.PI * bLeaves[i]) / totalLeaves;
+    const bAngle = aSector + bSize / 2;
+    aSector += bSize;
 
-    const bx = Math.cos(baseAngle) * RADII[1];
-    const by = Math.sin(baseAngle) * RADII[1];
-    const bId = `b${i}`;
-    all.push({ id: bId, label: branch.label, depth: 1, x: bx, y: by, color: pal.base, lightColor: pal.light, textColor: pal.text, parentId: 'root' });
+    all.push({ id: `b${i}`, label: branch.label, depth: 1, x: Math.cos(bAngle) * R[1], y: Math.sin(bAngle) * R[1], ...pal, parentId: 'root' });
 
-    const M = branch.children.length || 1;
+    const M = branch.children.length;
+    if (M === 0) return;
+
+    const cLeaves = branch.children.map(c => countLeaves(c));
+    const cTotal = cLeaves.reduce((s, l) => s + l, 0) || M;
+    const margin = Math.min(0.07, bSize * 0.1);
+    const usable = bSize - 2 * margin;
+    let cStart = bAngle - bSize / 2 + margin;
+
     branch.children.forEach((child, j) => {
-      const spread = sectorHalf * (M > 1 ? 1.1 : 0);
-      const childAngle = M === 1 ? baseAngle : baseAngle - spread + (spread * 2 * j) / (M - 1);
-      const cx2 = Math.cos(childAngle) * RADII[2];
-      const cy2 = Math.sin(childAngle) * RADII[2];
-      const cId = `b${i}c${j}`;
-      all.push({ id: cId, label: child.label, depth: 2, x: cx2, y: cy2, color: pal.base, lightColor: pal.light, textColor: pal.text, parentId: bId });
+      const cSize = usable * cLeaves[j] / cTotal;
+      const cAngle = cStart + cSize / 2;
+      cStart += cSize;
+
+      all.push({ id: `b${i}c${j}`, label: child.label, depth: 2, x: Math.cos(cAngle) * R[2], y: Math.sin(cAngle) * R[2], ...pal, parentId: `b${i}` });
 
       const K = child.children?.length || 0;
-      if (K > 0) {
-        const gcSector = sectorHalf * 0.8 / Math.max(M, 1);
-        child.children.forEach((gc, k) => {
-          const gcAngle = K === 1 ? childAngle : childAngle - gcSector + (gcSector * 2 * k) / (K - 1);
-          const gx = Math.cos(gcAngle) * RADII[3];
-          const gy = Math.sin(gcAngle) * RADII[3];
-          const gcId = `b${i}c${j}gc${k}`;
-          all.push({ id: gcId, label: gc.label, depth: 3, x: gx, y: gy, color: pal.base, lightColor: pal.light, textColor: pal.text, parentId: cId });
+      if (K === 0) return;
 
-          const L = gc.children?.length || 0;
-          if (L > 0) {
-            const ggSector = gcSector / Math.max(K, 1);
-            gc.children.forEach((gg, l) => {
-              const ggAngle = L === 1 ? gcAngle : gcAngle - ggSector + (ggSector * 2 * l) / (L - 1);
-              all.push({ id: `b${i}c${j}gc${k}gg${l}`, label: gg.label, depth: 4, x: Math.cos(ggAngle) * RADII[4], y: Math.sin(ggAngle) * RADII[4], color: pal.base, lightColor: pal.light, textColor: pal.text, parentId: gcId });
-            });
-          }
+      const gcLeaves = child.children.map(g => countLeaves(g));
+      const gcTotal = gcLeaves.reduce((s, l) => s + l, 0) || K;
+      const gcMargin = Math.min(0.05, cSize * 0.1);
+      const gcUsable = cSize - 2 * gcMargin;
+      let gcStart = cAngle - cSize / 2 + gcMargin;
+
+      child.children.forEach((gc, k) => {
+        const gcSize = gcUsable * gcLeaves[k] / gcTotal;
+        const gcAngle = gcStart + gcSize / 2;
+        gcStart += gcSize;
+
+        all.push({ id: `b${i}c${j}gc${k}`, label: gc.label, depth: 3, x: Math.cos(gcAngle) * R[3], y: Math.sin(gcAngle) * R[3], ...pal, parentId: `b${i}c${j}` });
+
+        const L = gc.children?.length || 0;
+        if (L === 0) return;
+
+        const ggLeaves = gc.children.map(g => countLeaves(g));
+        const ggTotal = ggLeaves.reduce((s, l) => s + l, 0) || L;
+        const ggMargin = Math.min(0.04, gcSize * 0.1);
+        const ggUsable = gcSize - 2 * ggMargin;
+        let ggStart = gcAngle - gcSize / 2 + ggMargin;
+
+        gc.children.forEach((gg, l) => {
+          const ggSize = ggUsable * ggLeaves[l] / ggTotal;
+          const ggAngle = ggStart + ggSize / 2;
+          ggStart += ggSize;
+          all.push({ id: `b${i}c${j}gc${k}gg${l}`, label: gg.label, depth: 4, x: Math.cos(ggAngle) * R[4], y: Math.sin(ggAngle) * R[4], ...pal, parentId: `b${i}c${j}gc${k}` });
         });
-      }
+      });
     });
   });
   return all;
 }
 
-/* ─── edge path ─────────────────────────────────────────────────── */
-function getEdgePath(f: LayoutNode, t: LayoutNode): string {
-  const { w: fw, h: fh } = nodeSize(f.depth);
-  const { w: tw, h: th } = nodeSize(t.depth);
+/* ─── Smooth bezier edge ─────────────────────────────────────────── */
+function edgePath(f: LayoutNode, t: LayoutNode): string {
+  const { w: fw, h: fh } = nodeGeo(f.depth);
+  const { w: tw, h: th } = nodeGeo(t.depth);
   const dx = t.x - f.x, dy = t.y - f.y;
   const dist = Math.hypot(dx, dy);
   if (dist < 1) return '';
   const nx = dx / dist, ny = dy / dist;
-  // exit from edge of source rect, enter edge of target rect
   const sx = f.x + nx * (fw / 2), sy = f.y + ny * (fh / 2);
   const ex = t.x - nx * (tw / 2), ey = t.y - ny * (th / 2);
-  const mid = 0.45;
-  return `M ${sx} ${sy} C ${sx + (ex - sx) * mid} ${sy}, ${sx + (ex - sx) * (1 - mid)} ${ey}, ${ex} ${ey}`;
+  const t1 = 0.42;
+  return `M ${sx} ${sy} C ${sx + (ex - sx) * t1} ${sy}, ${sx + (ex - sx) * (1 - t1)} ${ey}, ${ex} ${ey}`;
 }
 
-/* ─── data mutators ──────────────────────────────────────────────── */
-function updateNodeLabel(data: MindMapData, id: string, label: string): MindMapData {
+/* ─── Data mutation helpers ──────────────────────────────────────── */
+function updateLabel(data: MindMapData, id: string, label: string): MindMapData {
   if (id === 'root') return { ...data, topic: label };
   const m = id.match(/^b(\d+)(?:c(\d+)(?:gc(\d+)(?:gg(\d+))?)?)?$/);
   if (!m) return data;
@@ -146,28 +180,20 @@ function updateNodeLabel(data: MindMapData, id: string, label: string): MindMapD
   };
 }
 
-function addChildToNode(data: MindMapData, parentId: string): { data: MindMapData; newId: string } {
+function addChild(data: MindMapData, pid: string): { data: MindMapData; newId: string } {
   const blank = { label: 'New Node', children: [] };
-  if (parentId === 'root') {
-    return { data: { ...data, branches: [...data.branches, blank] }, newId: `b${data.branches.length}` };
-  }
-  const m = parentId.match(/^b(\d+)(?:c(\d+)(?:gc(\d+))?)?$/);
+  if (pid === 'root') return { data: { ...data, branches: [...data.branches, blank] }, newId: `b${data.branches.length}` };
+  const m = pid.match(/^b(\d+)(?:c(\d+)(?:gc(\d+))?)?$/);
   if (!m) return { data, newId: '' };
   const [, bi, ci, gci] = m.map(x => x !== undefined ? parseInt(x) : undefined);
   let newId = '';
   const branches = data.branches.map((br, i) => {
     if (i !== bi) return br;
-    if (ci === undefined) {
-      newId = `b${bi}c${br.children.length}`;
-      return { ...br, children: [...br.children, blank] };
-    }
+    if (ci === undefined) { newId = `b${bi}c${br.children.length}`; return { ...br, children: [...br.children, blank] }; }
     return {
       ...br, children: br.children.map((ch, j) => {
         if (j !== ci) return ch;
-        if (gci === undefined) {
-          newId = `b${bi}c${ci}gc${(ch.children || []).length}`;
-          return { ...ch, children: [...(ch.children || []), blank] };
-        }
+        if (gci === undefined) { newId = `b${bi}c${ci}gc${(ch.children || []).length}`; return { ...ch, children: [...(ch.children || []), blank] }; }
         return {
           ...ch, children: (ch.children || []).map((gc, k) => {
             if (k !== gci) return gc;
@@ -181,7 +207,7 @@ function addChildToNode(data: MindMapData, parentId: string): { data: MindMapDat
   return { data: { ...data, branches }, newId };
 }
 
-function deleteNodeFromData(data: MindMapData, id: string): MindMapData {
+function deleteNode(data: MindMapData, id: string): MindMapData {
   if (id === 'root') return data;
   const m = id.match(/^b(\d+)(?:c(\d+)(?:gc(\d+)(?:gg(\d+))?)?)?$/);
   if (!m) return data;
@@ -207,152 +233,121 @@ function deleteNodeFromData(data: MindMapData, id: string): MindMapData {
   };
 }
 
-/* ─── component ──────────────────────────────────────────────────── */
-interface Props {
-  data: MindMapData;
-  onDataChange?: (updated: MindMapData) => void;
-  height?: string;
-}
+/* ─── Component ──────────────────────────────────────────────────── */
+interface Props { data: MindMapData; onDataChange?: (d: MindMapData) => void; height?: string; }
 
 const MindMapCanvas: React.FC<Props> = ({ data, onDataChange, height = '680px' }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [cSize, setCSize] = useState({ w: 900, h: 680 });
-  const [scale, setScale] = useState(0.70);
+  const [scale, setScale] = useState(0.68);
   const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [nodeOffsets, setNodeOffsets] = useState<Record<string, { x: number; y: number }>>({});
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editValue, setEditValue] = useState('');
-  const [pendingEditId, setPendingEditId] = useState<string | null>(null);
-  const [deleteConfirm, setDeleteConfirm] = useState(false);
-
-  const dragRef = useRef<{ mode: 'canvas' | 'node'; nodeId?: string; lastX: number; lastY: number; moved: boolean } | null>(null);
+  const [offsets, setOffsets] = useState<Record<string, { x: number; y: number }>>({});
+  const [selId, setSelId] = useState<string | null>(null);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editVal, setEditVal] = useState('');
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [delConfirm, setDelConfirm] = useState(false);
+  const drag = useRef<{ mode: 'canvas' | 'node'; nid?: string; lx: number; ly: number; moved: boolean } | null>(null);
 
   const baseNodes = useMemo(() => computeLayout(data), [data]);
-  const nodes = useMemo(() => baseNodes.map(n => ({
-    ...n, x: n.x + (nodeOffsets[n.id]?.x ?? 0), y: n.y + (nodeOffsets[n.id]?.y ?? 0),
-  })), [baseNodes, nodeOffsets]);
-  const nodeMap = useMemo(() => new Map(nodes.map(n => [n.id, n])), [nodes]);
+  const nodes = useMemo(() => baseNodes.map(n => ({ ...n, x: n.x + (offsets[n.id]?.x ?? 0), y: n.y + (offsets[n.id]?.y ?? 0) })), [baseNodes, offsets]);
+  const nMap = useMemo(() => new Map(nodes.map(n => [n.id, n])), [nodes]);
 
   useEffect(() => {
-    if (pendingEditId && nodes.some(n => n.id === pendingEditId)) {
-      setEditingId(pendingEditId); setEditValue(''); setPendingEditId(null);
-    }
-  }, [nodes, pendingEditId]);
+    if (pendingId && nodes.some(n => n.id === pendingId)) { setEditId(pendingId); setEditVal(''); setPendingId(null); }
+  }, [nodes, pendingId]);
 
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([e]) => {
-      if (e) setCSize({ w: e.contentRect.width, h: e.contentRect.height });
-    });
-    ro.observe(el);
-    setCSize({ w: el.offsetWidth, h: el.offsetHeight });
+    const el = containerRef.current; if (!el) return;
+    const ro = new ResizeObserver(([e]) => { if (e) setCSize({ w: e.contentRect.width, h: e.contentRect.height }); });
+    ro.observe(el); setCSize({ w: el.offsetWidth, h: el.offsetHeight });
     return () => ro.disconnect();
   }, []);
 
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const fn = (e: WheelEvent) => {
-      e.preventDefault();
-      setScale(s => Math.min(3, Math.max(0.18, s - e.deltaY * 0.0008)));
-    };
-    el.addEventListener('wheel', fn, { passive: false });
-    return () => el.removeEventListener('wheel', fn);
+    const el = containerRef.current; if (!el) return;
+    const fn = (e: WheelEvent) => { e.preventDefault(); setScale(s => Math.min(3, Math.max(0.15, s - e.deltaY * 0.0008))); };
+    el.addEventListener('wheel', fn, { passive: false }); return () => el.removeEventListener('wheel', fn);
   }, []);
 
   const commitEdit = useCallback(() => {
-    if (editingId) {
-      const val = editValue.trim();
-      if (val && onDataChange) onDataChange(updateNodeLabel(data, editingId, val));
-    }
-    setEditingId(null); setEditValue('');
-  }, [editingId, editValue, data, onDataChange]);
+    if (editId && editVal.trim() && onDataChange) onDataChange(updateLabel(data, editId, editVal.trim()));
+    setEditId(null); setEditVal('');
+  }, [editId, editVal, data, onDataChange]);
 
-  const handleContainerMouseDown = useCallback((e: React.MouseEvent) => {
-    if (editingId) { commitEdit(); return; }
-    setDeleteConfirm(false);
-    dragRef.current = { mode: 'canvas', lastX: e.clientX, lastY: e.clientY, moved: false };
-  }, [editingId, commitEdit]);
+  const onContainerMD = useCallback((e: React.MouseEvent) => {
+    if (editId) { commitEdit(); return; }
+    setDelConfirm(false);
+    drag.current = { mode: 'canvas', lx: e.clientX, ly: e.clientY, moved: false };
+  }, [editId, commitEdit]);
 
-  const handleNodeMouseDown = useCallback((e: React.MouseEvent, nodeId: string) => {
-    e.stopPropagation();
-    if (editingId) return;
-    setDeleteConfirm(false);
-    dragRef.current = { mode: 'node', nodeId, lastX: e.clientX, lastY: e.clientY, moved: false };
-  }, [editingId]);
+  const onNodeMD = useCallback((e: React.MouseEvent, nid: string) => {
+    e.stopPropagation(); if (editId) return;
+    setDelConfirm(false);
+    drag.current = { mode: 'node', nid, lx: e.clientX, ly: e.clientY, moved: false };
+  }, [editId]);
 
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    const d = dragRef.current;
-    if (!d) return;
-    const dx = e.clientX - d.lastX, dy = e.clientY - d.lastY;
+  const onMM = useCallback((e: React.MouseEvent) => {
+    const d = drag.current; if (!d) return;
+    const dx = e.clientX - d.lx, dy = e.clientY - d.ly;
     if (Math.abs(dx) > 3 || Math.abs(dy) > 3) d.moved = true;
     if (d.mode === 'canvas') setPan(p => ({ x: p.x + dx, y: p.y + dy }));
-    else if (d.mode === 'node' && d.nodeId && d.moved) {
-      const nid = d.nodeId;
-      setNodeOffsets(prev => ({ ...prev, [nid]: { x: (prev[nid]?.x ?? 0) + dx / scale, y: (prev[nid]?.y ?? 0) + dy / scale } }));
+    else if (d.mode === 'node' && d.nid && d.moved) {
+      const id = d.nid;
+      setOffsets(prev => ({ ...prev, [id]: { x: (prev[id]?.x ?? 0) + dx / scale, y: (prev[id]?.y ?? 0) + dy / scale } }));
     }
-    d.lastX = e.clientX; d.lastY = e.clientY;
+    d.lx = e.clientX; d.ly = e.clientY;
   }, [scale]);
 
-  const handleMouseUp = useCallback(() => { dragRef.current = null; }, []);
-  const handleNodeClick = useCallback((e: React.MouseEvent, nodeId: string) => {
+  const onMU = useCallback(() => { drag.current = null; }, []);
+
+  const onNodeClick = useCallback((e: React.MouseEvent, nid: string) => {
     e.stopPropagation();
-    if (dragRef.current?.moved) return;
-    setSelectedId(id => id === nodeId ? null : nodeId);
-    setDeleteConfirm(false);
-  }, []);
-  const handleContainerClick = useCallback(() => {
-    if (!dragRef.current?.moved) { setSelectedId(null); setDeleteConfirm(false); }
-  }, []);
-  const handleNodeDoubleClick = useCallback((e: React.MouseEvent, node: typeof nodes[0]) => {
-    e.stopPropagation();
-    setSelectedId(node.id); setEditingId(node.id); setEditValue(node.label);
+    if (drag.current?.moved) return;
+    setSelId(id => id === nid ? null : nid); setDelConfirm(false);
   }, []);
 
-  const handleAddChild = useCallback(() => {
-    if (!selectedId) return;
-    const { data: updated, newId } = addChildToNode(data, selectedId);
-    onDataChange?.(updated); setPendingEditId(newId); setSelectedId(null);
-  }, [selectedId, data, onDataChange]);
+  const onContainerClick = useCallback(() => {
+    if (!drag.current?.moved) { setSelId(null); setDelConfirm(false); }
+  }, []);
 
-  const handleDeleteNode = useCallback(() => {
-    if (!selectedId || selectedId === 'root') return;
-    if (!deleteConfirm) { setDeleteConfirm(true); return; }
-    onDataChange?.(deleteNodeFromData(data, selectedId));
-    setSelectedId(null); setDeleteConfirm(false);
-  }, [selectedId, data, onDataChange, deleteConfirm]);
+  const onNodeDbl = useCallback((e: React.MouseEvent, n: typeof nodes[0]) => {
+    e.stopPropagation(); setSelId(n.id); setEditId(n.id); setEditVal(n.label);
+  }, []);
 
-  const handleEditSelected = useCallback(() => {
-    const node = nodes.find(n => n.id === selectedId);
-    if (!node) return;
-    setEditingId(node.id); setEditValue(node.label);
-  }, [selectedId, nodes]);
+  const doAdd = useCallback(() => {
+    if (!selId) return;
+    const { data: d, newId } = addChild(data, selId);
+    onDataChange?.(d); setPendingId(newId); setSelId(null);
+  }, [selId, data, onDataChange]);
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      if (editingId) { setEditingId(null); setEditValue(''); }
-      else { setSelectedId(null); setDeleteConfirm(false); }
+  const doDel = useCallback(() => {
+    if (!selId || selId === 'root') return;
+    if (!delConfirm) { setDelConfirm(true); return; }
+    onDataChange?.(deleteNode(data, selId)); setSelId(null); setDelConfirm(false);
+  }, [selId, data, onDataChange, delConfirm]);
+
+  const doEdit = useCallback(() => {
+    const n = nodes.find(x => x.id === selId); if (!n) return;
+    setEditId(n.id); setEditVal(n.label);
+  }, [selId, nodes]);
+
+  const onKey = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') { if (editId) { setEditId(null); setEditVal(''); } else { setSelId(null); setDelConfirm(false); } }
+    if (e.key === 'Delete' && selId && selId !== 'root' && !editId) {
+      if (!delConfirm) setDelConfirm(true);
+      else { onDataChange?.(deleteNode(data, selId)); setSelId(null); setDelConfirm(false); }
     }
-    if (e.key === 'Delete' && selectedId && selectedId !== 'root' && !editingId) {
-      if (!deleteConfirm) setDeleteConfirm(true);
-      else { onDataChange?.(deleteNodeFromData(data, selectedId)); setSelectedId(null); setDeleteConfirm(false); }
-    }
-  }, [editingId, selectedId, deleteConfirm, data, onDataChange]);
+  }, [editId, selId, delConfirm, data, onDataChange]);
 
   const cx = cSize.w / 2, cy = cSize.h / 2;
 
-  const selectedNode = selectedId ? nodes.find(n => n.id === selectedId) : null;
-  const toolbarPos = selectedNode ? (() => {
-    const { h } = nodeSize(selectedNode.depth);
-    const sx = cx + pan.x + selectedNode.x * scale;
-    const sy = cy + pan.y + selectedNode.y * scale;
+  const selNode = selId ? nodes.find(n => n.id === selId) : null;
+  const toolbarPos = selNode ? (() => {
+    const { h } = nodeGeo(selNode.depth);
+    const sx = cx + pan.x + selNode.x * scale, sy = cy + pan.y + selNode.y * scale;
     const above = sy - (h / 2) * scale - 52;
-    return {
-      left: Math.max(8, Math.min(cSize.w - 208, sx - 88)),
-      top: above < 8 ? sy + (h / 2) * scale + 8 : above,
-    };
+    return { left: Math.max(8, Math.min(cSize.w - 212, sx - 88)), top: above < 8 ? sy + (h / 2) * scale + 8 : above };
   })() : null;
 
   return (
@@ -360,235 +355,199 @@ const MindMapCanvas: React.FC<Props> = ({ data, onDataChange, height = '680px' }
       ref={containerRef}
       tabIndex={0}
       className="relative w-full overflow-hidden outline-none"
-      style={{
-        height,
-        background: 'radial-gradient(ellipse at 50% 0%, #eef2ff 0%, #f8f9fe 55%, #f1f5f9 100%)',
-        cursor: dragRef.current?.mode === 'canvas' ? 'grabbing' : 'grab',
-      }}
-      onMouseDown={handleContainerMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
-      onClick={handleContainerClick}
-      onKeyDown={handleKeyDown}
+      style={{ height, background: 'linear-gradient(145deg, #f0f4ff 0%, #f8fafc 50%, #f0faf5 100%)', cursor: drag.current?.mode === 'canvas' ? 'grabbing' : 'grab' }}
+      onMouseDown={onContainerMD}
+      onMouseMove={onMM}
+      onMouseUp={onMU}
+      onMouseLeave={onMU}
+      onClick={onContainerClick}
+      onKeyDown={onKey}
     >
-      {/* dark-mode bg override */}
-      <style>{`.dark .mm-canvas-bg { background: radial-gradient(ellipse at 50% 0%, #1e1b4b22 0%, #0f172a 60%) !important; }`}</style>
-
-      {/* Zoom controls */}
+      {/* Zoom buttons */}
       <div className="absolute top-3 right-3 z-20 flex flex-col gap-1.5">
         {([
-          [ZoomIn, () => setScale(s => Math.min(3, s + 0.14))],
-          [ZoomOut, () => setScale(s => Math.max(0.18, s - 0.14))],
-          [Maximize2, () => { setScale(0.70); setPan({ x: 0, y: 0 }); }],
+          [ZoomIn, () => setScale(s => Math.min(3, s + 0.12))],
+          [ZoomOut, () => setScale(s => Math.max(0.15, s - 0.12))],
+          [Maximize2, () => { setScale(0.68); setPan({ x: 0, y: 0 }); setOffsets({}); }],
         ] as const).map(([Icon, fn], i) => (
           <button key={i} onClick={fn as () => void}
-            className="p-2 bg-white/90 dark:bg-slate-800/90 backdrop-blur-sm rounded-lg shadow border border-white/60 dark:border-slate-600 hover:bg-indigo-50 dark:hover:bg-slate-700 text-gray-500 dark:text-slate-300 transition-colors"
+            className="p-2 bg-white/95 rounded-lg shadow-sm border border-slate-200 hover:bg-indigo-50 text-slate-500 hover:text-indigo-600 transition-all"
           >
             <Icon className="w-4 h-4" />
           </button>
         ))}
       </div>
 
-      {/* Floating toolbar */}
-      {selectedNode && toolbarPos && !editingId && (
+      {/* Node toolbar */}
+      {selNode && toolbarPos && !editId && (
         <div
-          className="absolute z-30 flex items-center gap-0.5 bg-white dark:bg-slate-800 rounded-xl shadow-2xl border border-gray-100 dark:border-slate-600 p-1"
+          className="absolute z-30 flex items-center gap-0.5 bg-white rounded-xl shadow-xl border border-slate-100 p-1"
           style={{ left: toolbarPos.left, top: toolbarPos.top }}
-          onMouseDown={e => e.stopPropagation()}
-          onClick={e => e.stopPropagation()}
+          onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
         >
-          <button onClick={handleEditSelected}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-gray-600 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
-          >
+          <button onClick={doEdit} className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
             <Pencil className="w-3.5 h-3.5" /> Edit
           </button>
-          <div className="w-px h-5 bg-gray-200 dark:bg-slate-600" />
-          <button onClick={handleAddChild}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors"
-          >
+          <div className="w-px h-5 bg-slate-200" />
+          <button onClick={doAdd} className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
             <Plus className="w-3.5 h-3.5" /> Add
           </button>
-          {selectedId !== 'root' && <>
-            <div className="w-px h-5 bg-gray-200 dark:bg-slate-600" />
-            <button onClick={handleDeleteNode}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-all ${deleteConfirm ? 'bg-red-500 text-white' : 'text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20'}`}
-            >
-              <Trash2 className="w-3.5 h-3.5" /> {deleteConfirm ? 'Sure?' : 'Delete'}
+          {selId !== 'root' && <>
+            <div className="w-px h-5 bg-slate-200" />
+            <button onClick={doDel} className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-all ${delConfirm ? 'bg-red-500 text-white' : 'text-red-500 hover:bg-red-50'}`}>
+              <Trash2 className="w-3.5 h-3.5" /> {delConfirm ? 'Sure?' : 'Delete'}
             </button>
           </>}
         </div>
       )}
 
-      {/* Hints */}
-      <div className="absolute bottom-3 left-3 z-10 flex items-center gap-1.5 text-xs text-gray-400 dark:text-slate-500 bg-white/85 dark:bg-slate-800/85 backdrop-blur-sm px-3 py-1.5 rounded-xl border border-white/60 dark:border-slate-700 pointer-events-none select-none shadow-sm">
-        <MousePointer2 className="w-3 h-3" />
-        Click to select · Double-click to edit · Drag to move
+      {/* Bottom hints */}
+      <div className="absolute bottom-3 left-3 z-10 flex items-center gap-1.5 text-xs text-slate-400 bg-white/85 backdrop-blur-sm px-3 py-1.5 rounded-xl border border-white/60 pointer-events-none select-none shadow-sm">
+        <MousePointer2 className="w-3 h-3" /> Click · Double-click to edit · Drag to move
       </div>
-      <div className="absolute bottom-3 right-3 z-10 text-xs font-mono text-gray-400 dark:text-slate-500 bg-white/85 dark:bg-slate-800/85 backdrop-blur-sm px-2.5 py-1.5 rounded-xl border border-white/60 dark:border-slate-700 pointer-events-none shadow-sm">
+      <div className="absolute bottom-3 right-14 z-10 text-xs font-mono text-slate-400 bg-white/85 backdrop-blur-sm px-2.5 py-1.5 rounded-xl border border-white/60 pointer-events-none shadow-sm">
         {Math.round(scale * 100)}%
       </div>
 
-      {/* SVG */}
+      {/* Canvas */}
       <svg width="100%" height="100%" style={{ display: 'block' }}>
         <defs>
+          {/* Dot grid */}
+          <pattern id="grid" width="30" height="30" patternUnits="userSpaceOnUse">
+            <circle cx="15" cy="15" r="0.9" fill="#94a3b8" opacity="0.22" />
+          </pattern>
           {/* Root gradient */}
-          <linearGradient id="rootGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <linearGradient id="rg" x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%" stopColor="#6366f1" />
             <stop offset="100%" stopColor="#7c3aed" />
           </linearGradient>
-
           {/* Root glow */}
-          <filter id="rootGlow" x="-40%" y="-40%" width="180%" height="180%">
-            <feGaussianBlur stdDeviation="12" result="blur" />
-            <feFlood floodColor="#6366f1" floodOpacity="0.18" result="color" />
-            <feComposite in="color" in2="blur" operator="in" result="glow" />
-            <feMerge><feMergeNode in="glow" /><feMergeNode in="SourceGraphic" /></feMerge>
+          <filter id="rglow" x="-40%" y="-40%" width="180%" height="180%">
+            <feGaussianBlur stdDeviation="10" result="b" />
+            <feFlood floodColor="#6366f1" floodOpacity="0.2" result="c" />
+            <feComposite in="c" in2="b" operator="in" result="g" />
+            <feMerge><feMergeNode in="g" /><feMergeNode in="SourceGraphic" /></feMerge>
           </filter>
-
           {/* Branch glow */}
-          {BRANCH_COLORS.map((c, i) => (
-            <filter key={i} id={`bGlow${i}`} x="-50%" y="-50%" width="200%" height="200%">
-              <feGaussianBlur stdDeviation="6" result="blur" />
-              <feFlood floodColor={c.base} floodOpacity="0.22" result="color" />
-              <feComposite in="color" in2="blur" operator="in" result="glow" />
-              <feMerge><feMergeNode in="glow" /><feMergeNode in="SourceGraphic" /></feMerge>
+          {PALETTE.map((p, i) => (
+            <filter key={i} id={`pg${i}`} x="-50%" y="-50%" width="200%" height="200%">
+              <feGaussianBlur stdDeviation="5" result="b" />
+              <feFlood floodColor={p.base} floodOpacity="0.18" result="c" />
+              <feComposite in="c" in2="b" operator="in" result="g" />
+              <feMerge><feMergeNode in="g" /><feMergeNode in="SourceGraphic" /></feMerge>
             </filter>
           ))}
-
-          {/* Selection ring filter */}
-          <filter id="selGlow" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="5" result="blur" />
-            <feFlood floodColor="#6366f1" floodOpacity="0.5" result="color" />
-            <feComposite in="color" in2="blur" operator="in" result="glow" />
-            <feMerge><feMergeNode in="glow" /><feMergeNode in="SourceGraphic" /></feMerge>
+          {/* Selection glow */}
+          <filter id="sglow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="6" result="b" />
+            <feFlood floodColor="#6366f1" floodOpacity="0.45" result="c" />
+            <feComposite in="c" in2="b" operator="in" result="g" />
+            <feMerge><feMergeNode in="g" /><feMergeNode in="SourceGraphic" /></feMerge>
           </filter>
-
-          {/* Dot grid */}
-          <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
-            <circle cx="14" cy="14" r="1" fill="#94a3b8" opacity="0.25" />
-          </pattern>
         </defs>
 
-        {/* Grid */}
-        <rect width="100%" height="100%" fill="url(#dots)" />
+        {/* Dot grid bg */}
+        <rect width="100%" height="100%" fill="url(#grid)" />
 
         <g transform={`translate(${cx + pan.x}, ${cy + pan.y}) scale(${scale})`}>
           {/* Edges */}
-          {nodes.map(node => {
-            if (!node.parentId) return null;
-            const parent = nodeMap.get(node.parentId);
-            if (!parent) return null;
-            const strokeW = [0, 3, 2, 1.4, 1][Math.min(node.depth, 4)];
-            const opacity = [0, 0.55, 0.42, 0.3, 0.22][Math.min(node.depth, 4)];
-            return (
-              <path key={`e-${node.id}`}
-                d={getEdgePath(parent, node)}
-                fill="none"
-                stroke={node.color}
-                strokeWidth={strokeW}
-                strokeOpacity={opacity}
-                strokeLinecap="round"
-              />
-            );
+          {nodes.map(n => {
+            if (!n.parentId) return null;
+            const parent = nMap.get(n.parentId); if (!parent) return null;
+            const sw = [0, 2.8, 1.8, 1.2, 0.9][Math.min(n.depth, 4)];
+            const op = [0, 0.55, 0.38, 0.26, 0.18][Math.min(n.depth, 4)];
+            return <path key={`e-${n.id}`} d={edgePath(parent, n)} fill="none" stroke={n.base} strokeWidth={sw} strokeOpacity={op} strokeLinecap="round" />;
           })}
 
           {/* Nodes */}
-          {nodes.map(node => {
-            const { w, h, rx } = nodeSize(node.depth);
-            const isRoot = node.depth === 0;
-            const isBranch = node.depth === 1;
-            const isSelected = selectedId === node.id;
-            const isEditing = editingId === node.id;
-            const fs = nodeFontSize(node.depth);
-            const lines = wrapLabel(node.label, isRoot ? 22 : node.depth === 1 ? 17 : 15);
-            const lineH = fs + 4.5;
-            const colorIdx = BRANCH_COLORS.findIndex(c => c.base === node.color);
-            const filterAttr = isRoot ? 'url(#rootGlow)' : isBranch && colorIdx >= 0 ? `url(#bGlow${colorIdx})` : isSelected ? 'url(#selGlow)' : undefined;
+          {nodes.map(n => {
+            const { w, h, rx } = nodeGeo(n.depth);
+            const isSel = selId === n.id;
+            const isEdit = editId === n.id;
+            const isRoot = n.depth === 0;
+            const isBranch = n.depth === 1;
+            const fs = nodeFSize(n.depth);
+            const lines = wrap(n.label, isRoot ? 22 : n.depth === 1 ? 16 : 14);
+            const lh = fs + 4.5;
+            const palIdx = PALETTE.findIndex(p => p.base === n.base);
+            const filterAttr = isRoot ? 'url(#rglow)' : isBranch && palIdx >= 0 ? `url(#pg${palIdx})` : isSel ? 'url(#sglow)' : undefined;
 
             return (
-              <g key={node.id}
-                transform={`translate(${node.x}, ${node.y})`}
+              <g key={n.id} transform={`translate(${n.x}, ${n.y})`}
                 filter={filterAttr}
-                onMouseDown={e => handleNodeMouseDown(e, node.id)}
-                onClick={e => handleNodeClick(e, node.id)}
-                onDoubleClick={e => handleNodeDoubleClick(e, node)}
+                onMouseDown={e => onNodeMD(e, n.id)}
+                onClick={e => onNodeClick(e, n.id)}
+                onDoubleClick={e => onNodeDbl(e, n)}
                 style={{ cursor: 'pointer' }}
               >
-                {/* === ROOT === */}
+                {/* ROOT */}
                 {isRoot && <>
-                  {/* Outer glow ring (always) */}
-                  <rect x={-w / 2 - 3} y={-h / 2 - 3} width={w + 6} height={h + 6} rx={rx + 3}
-                    fill="none" stroke="#818cf8" strokeWidth="1.5" strokeOpacity="0.4"
-                    strokeDasharray={isSelected ? '0' : '5 4'}
+                  {/* outer ring */}
+                  <rect x={-w / 2 - 4} y={-h / 2 - 4} width={w + 8} height={h + 8} rx={rx + 4}
+                    fill="none" stroke="#a5b4fc" strokeWidth="1.5" strokeOpacity={isSel ? 0.9 : 0.45} strokeDasharray={isSel ? '0' : '6 4'}
                   />
                   <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={rx}
-                    fill="url(#rootGrad)"
-                    stroke={isSelected ? '#a5b4fc' : '#4338ca'}
-                    strokeWidth={isSelected ? 2.5 : 1.5}
+                    fill="url(#rg)" stroke={isSel ? '#c7d2fe' : '#4338ca'} strokeWidth={isSel ? 2.5 : 1.5}
                   />
                 </>}
 
-                {/* === BRANCH (depth 1) === */}
+                {/* BRANCH depth=1 */}
                 {isBranch && <>
-                  {isSelected && <rect x={-w / 2 - 5} y={-h / 2 - 5} width={w + 10} height={h + 10} rx={rx + 5}
-                    fill="none" stroke={node.color} strokeWidth="2" strokeOpacity="0.5" strokeDasharray="6 4"
+                  {isSel && <rect x={-w / 2 - 5} y={-h / 2 - 5} width={w + 10} height={h + 10} rx={rx + 5}
+                    fill="none" stroke={n.base} strokeWidth="2" strokeOpacity="0.45" strokeDasharray="6 4"
                   />}
-                  {/* subtle shadow rect */}
-                  <rect x={-w / 2 + 3} y={-h / 2 + 4} width={w} height={h} rx={rx}
-                    fill={node.color} opacity="0.10"
+                  {/* shadow layer */}
+                  <rect x={-w / 2 + 2} y={-h / 2 + 3} width={w} height={h} rx={rx}
+                    fill={n.base} opacity="0.09"
                   />
                   <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={rx}
-                    fill={node.lightColor} stroke={node.color}
-                    strokeWidth={isSelected ? 2.5 : 2}
-                    strokeOpacity={isSelected ? 1 : 0.75}
+                    fill={n.light} stroke={n.base} strokeWidth={isSel ? 2.5 : 1.8} strokeOpacity={isSel ? 1 : 0.7}
                   />
-                  {/* Colored top-edge accent */}
-                  <rect x={-w / 2 + 14} y={-h / 2} width={w - 28} height={3.5} rx={1.5}
-                    fill={node.color} opacity={isSelected ? 0.9 : 0.6}
+                  {/* top accent line */}
+                  <rect x={-w / 2 + 16} y={-h / 2} width={w - 32} height={3.5} rx={1.75}
+                    fill={n.base} opacity={isSel ? 0.85 : 0.55}
+                  />
+                  {/* side dot */}
+                  <circle cx={-w / 2 + 11} cy={0} r={3.5} fill={n.base} opacity="0.8" />
+                </>}
+
+                {/* CHILD depth=2 */}
+                {n.depth === 2 && <>
+                  {isSel && <rect x={-w / 2 - 4} y={-h / 2 - 4} width={w + 8} height={h + 8} rx={rx + 4}
+                    fill="none" stroke={n.base} strokeWidth="1.8" strokeOpacity="0.45" strokeDasharray="5 3"
+                  />}
+                  <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={rx}
+                    fill="white" stroke={n.base} strokeWidth={isSel ? 2 : 1.2} strokeOpacity={isSel ? 0.85 : 0.45}
+                  />
+                  {/* left accent bar */}
+                  <rect x={-w / 2} y={-h / 2 + 7} width={3.5} height={h - 14} rx={1.75}
+                    fill={n.base} opacity={isSel ? 0.8 : 0.55}
                   />
                 </>}
 
-                {/* === CHILD (depth 2) === */}
-                {node.depth === 2 && <>
-                  {isSelected && <rect x={-w / 2 - 4} y={-h / 2 - 4} width={w + 8} height={h + 8} rx={rx + 4}
-                    fill="none" stroke={node.color} strokeWidth="1.8" strokeOpacity="0.5" strokeDasharray="5 3"
+                {/* GRANDCHILD+ depth≥3 */}
+                {n.depth >= 3 && <>
+                  {isSel && <rect x={-w / 2 - 3} y={-h / 2 - 3} width={w + 6} height={h + 6} rx={rx + 3}
+                    fill="none" stroke={n.base} strokeWidth="1.5" strokeOpacity="0.4" strokeDasharray="4 3"
                   />}
                   <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={rx}
-                    fill="white" stroke={node.color}
-                    strokeWidth={isSelected ? 2 : 1.4}
-                    strokeOpacity={isSelected ? 0.9 : 0.55}
-                  />
-                  {/* Left accent bar */}
-                  <rect x={-w / 2} y={-h / 2 + 6} width={4} height={h - 12} rx={2}
-                    fill={node.color} opacity={isSelected ? 0.85 : 0.6}
+                    fill={n.light} fillOpacity="0.65"
+                    stroke={n.base} strokeWidth={isSel ? 1.8 : 0.9} strokeOpacity={isSel ? 0.75 : 0.35}
                   />
                 </>}
 
-                {/* === GRANDCHILD (depth 3+) === */}
-                {node.depth >= 3 && <>
-                  {isSelected && <rect x={-w / 2 - 3} y={-h / 2 - 3} width={w + 6} height={h + 6} rx={rx + 3}
-                    fill="none" stroke={node.color} strokeWidth="1.5" strokeOpacity="0.45" strokeDasharray="4 3"
-                  />}
-                  <rect x={-w / 2} y={-h / 2} width={w} height={h} rx={rx}
-                    fill={node.lightColor} fillOpacity="0.7"
-                    stroke={node.color} strokeWidth={isSelected ? 1.8 : 1}
-                    strokeOpacity={isSelected ? 0.8 : 0.4}
-                  />
-                </>}
-
-                {/* === LABEL / EDITOR === */}
-                {isEditing ? (
+                {/* Label / Editor */}
+                {isEdit ? (
                   <foreignObject x={-w / 2 + 8} y={-h / 2 + 4} width={w - 16} height={h - 8}>
                     <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       <input
-                        value={editValue}
-                        onChange={e => setEditValue(e.target.value)}
+                        value={editVal}
+                        onChange={e => setEditVal(e.target.value)}
                         onBlur={commitEdit}
                         onKeyDown={e => {
                           e.stopPropagation();
                           if (e.key === 'Enter') commitEdit();
-                          if (e.key === 'Escape') { setEditingId(null); setEditValue(''); }
+                          if (e.key === 'Escape') { setEditId(null); setEditVal(''); }
                         }}
                         onMouseDown={e => e.stopPropagation()}
                         onClick={e => e.stopPropagation()}
@@ -596,8 +555,8 @@ const MindMapCanvas: React.FC<Props> = ({ data, onDataChange, height = '680px' }
                         style={{
                           width: '100%', background: 'transparent', border: 'none', outline: 'none',
                           textAlign: 'center', fontSize: `${fs}px`,
-                          fontWeight: node.depth <= 1 ? 700 : 600,
-                          color: isRoot ? 'white' : node.depth === 1 ? node.textColor : '#1e293b',
+                          fontWeight: n.depth <= 1 ? 700 : 600,
+                          color: isRoot ? 'white' : n.depth === 1 ? n.text : '#1e293b',
                           fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
                         }}
                       />
@@ -606,27 +565,15 @@ const MindMapCanvas: React.FC<Props> = ({ data, onDataChange, height = '680px' }
                 ) : (
                   lines.map((line, li) => (
                     <text key={li}
-                      x={node.depth === 2 ? 4 : 0}
-                      y={(li - (lines.length - 1) / 2) * lineH}
-                      textAnchor="middle"
-                      dominantBaseline="central"
+                      x={n.depth === 2 ? 4 : 0}
+                      y={(li - (lines.length - 1) / 2) * lh}
+                      textAnchor="middle" dominantBaseline="central"
                       fontSize={fs}
-                      fontWeight={node.depth === 0 ? 800 : node.depth === 1 ? 700 : node.depth === 2 ? 600 : 500}
-                      letterSpacing={node.depth === 0 ? '0.4' : '0.15'}
-                      fill={
-                        isRoot ? 'white'
-                          : node.depth === 1 ? node.textColor
-                          : node.depth === 2 ? '#1e293b'
-                          : '#475569'
-                      }
-                      style={{
-                        fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
-                        pointerEvents: 'none',
-                        textRendering: 'optimizeLegibility',
-                      }}
-                    >
-                      {line}
-                    </text>
+                      fontWeight={n.depth === 0 ? 800 : n.depth === 1 ? 700 : n.depth === 2 ? 600 : 500}
+                      letterSpacing={n.depth === 0 ? '0.5' : '0.1'}
+                      fill={isRoot ? 'white' : n.depth === 1 ? n.text : n.depth === 2 ? '#1e293b' : '#475569'}
+                      style={{ fontFamily: 'Inter, system-ui, -apple-system, sans-serif', pointerEvents: 'none', userSelect: 'none', textRendering: 'optimizeLegibility' }}
+                    >{line}</text>
                   ))
                 )}
               </g>
