@@ -14,8 +14,7 @@ const Home: React.FC = () => {
   const mainFeatures = [
     {
       title: 'AI Quiz Builder',
-      titleAr: 'منشئ الكويز بالذكاء الاصطناعي',
-      description: 'ارفع ملف PDF أو Word أو صورة، وسيقوم الذكاء الاصطناعي بتحليل المحتوى وإنشاء أسئلة اختيار متعدد احترافية في ثوانٍ.',
+      description: 'Upload a PDF, Word doc, or image and let Gemini AI analyze the content and generate professional quiz questions in seconds.',
       icon: Sparkles,
       gradient: 'from-indigo-500 to-purple-600',
       bg: 'from-indigo-50 to-purple-50 dark:from-indigo-900/20 dark:to-purple-900/20',
@@ -23,8 +22,7 @@ const Home: React.FC = () => {
     },
     {
       title: 'Mind Map Builder',
-      titleAr: 'منشئ الخرائط الذهنية',
-      description: 'أنشئ خرائط ذهنية تفاعلية بالذكاء الاصطناعي بمجرد كتابة موضوع، مع عرض مرئي SVG يدعم التكبير والتصغير.',
+      description: 'Generate interactive AI-powered mind maps from any topic. Beautiful radial SVG visuals with zoom and pan support.',
       icon: Brain,
       gradient: 'from-violet-500 to-fuchsia-600',
       bg: 'from-violet-50 to-fuchsia-50 dark:from-violet-900/20 dark:to-fuchsia-900/20',
@@ -32,8 +30,7 @@ const Home: React.FC = () => {
     },
     {
       title: 'Quiz Library',
-      titleAr: 'مكتبة الكويزات',
-      description: 'استعرض جميع الكويزات المتاحة، العب وتابع نتائجك وإحصائياتك التفصيلية في مكان واحد.',
+      description: 'Browse, play, and track your results. All your quizzes in one place with detailed performance statistics.',
       icon: Library,
       gradient: 'from-blue-500 to-cyan-600',
       bg: 'from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20',
@@ -44,29 +41,29 @@ const Home: React.FC = () => {
   const steps = [
     {
       number: '1',
-      title: 'ارفع المحتوى',
-      description: 'ارفع PDF أو Word أو صورة أو الصق النص مباشرة في المحرر',
+      title: 'Upload Content',
+      description: 'Upload a PDF, Word doc, or image — or paste text directly into the editor.',
       icon: Upload,
     },
     {
       number: '2',
-      title: 'الذكاء الاصطناعي يحلل',
-      description: 'يحلل Gemini AI المحتوى ويولد أسئلة دقيقة ومتنوعة تلقائياً',
+      title: 'AI Analyzes',
+      description: 'Gemini AI reads your content and generates accurate, varied questions automatically.',
       icon: Cpu,
     },
     {
       number: '3',
-      title: 'العب وشارك',
-      description: 'ابدأ الكويز فوراً، تابع نتائجك، وشاركه مع من تريد',
+      title: 'Play & Share',
+      description: 'Start your quiz instantly, track your score, and share it with anyone.',
       icon: Play,
     },
   ];
 
   const capabilities = [
-    { label: 'متعدد اللغات', icon: Globe, desc: 'يدعم العربية والإنجليزية وأكثر من 50 لغة أخرى' },
-    { label: 'استيراد CSV', icon: FileText, desc: 'استورد أسئلة جاهزة من ملفات CSV بتنسيق بسيط' },
-    { label: 'سريع وذكي', icon: Zap, desc: 'يولد كويز كامل في أقل من 30 ثانية' },
-    { label: 'مجاني بالكامل', icon: Star, desc: 'جميع المميزات متاحة بدون قيود ولا اشتراك' },
+    { label: 'Multilingual', icon: Globe, desc: 'Supports Arabic, English, and 50+ other languages' },
+    { label: 'CSV Import', icon: FileText, desc: 'Import bulk questions from a simple CSV file' },
+    { label: 'Fast & Smart', icon: Zap, desc: 'Generates a full quiz in under 30 seconds' },
+    { label: 'Completely Free', icon: Star, desc: 'All features available with no limits or subscriptions' },
   ];
 
   return (
@@ -90,7 +87,7 @@ const Home: React.FC = () => {
           className="relative inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-50 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 text-sm font-medium border border-indigo-100 dark:border-indigo-800"
         >
           <Sparkles className="w-4 h-4" />
-          مدعوم بـ Gemini AI
+          Powered by Gemini AI
         </motion.div>
 
         <motion.h1
@@ -99,9 +96,9 @@ const Home: React.FC = () => {
           transition={{ duration: 0.5, delay: 0.1 }}
           className="relative text-5xl md:text-7xl font-extrabold text-gray-900 dark:text-white tracking-tight leading-tight"
         >
-          حوّل محتواك إلى{' '}
+          Transform Your Content into{' '}
           <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400">
-            كويز تفاعلي
+            Interactive Quizzes
           </span>
         </motion.h1>
 
@@ -111,8 +108,8 @@ const Home: React.FC = () => {
           transition={{ duration: 0.5, delay: 0.2 }}
           className="relative text-xl text-gray-600 dark:text-slate-400 max-w-3xl mx-auto leading-relaxed"
         >
-          الأداة الأذكى للطلاب والمعلمين — ارفع أي ملف وسيقوم الذكاء الاصطناعي بإنشاء
-          اختبار احترافي فوراً، أو أنشئ خرائط ذهنية بكلمات بسيطة.
+          The smartest tool for students and teachers. Upload any file and let AI instantly
+          generate a professional quiz — or build mind maps with just a few words.
         </motion.p>
 
         <motion.div
@@ -127,7 +124,7 @@ const Home: React.FC = () => {
               className="group inline-flex items-center gap-2 px-8 py-4 text-lg font-bold rounded-2xl text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 shadow-xl shadow-indigo-200/60 dark:shadow-indigo-900/30 hover:shadow-2xl transition-all transform hover:-translate-y-1"
             >
               <Sparkles className="w-5 h-5 group-hover:rotate-12 transition-transform" />
-              أنشئ كويز الآن
+              Create a Quiz
               <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
             </Link>
           ) : (
@@ -136,7 +133,7 @@ const Home: React.FC = () => {
               className="group inline-flex items-center gap-2 px-8 py-4 text-lg font-bold rounded-2xl text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 shadow-xl shadow-indigo-200/60 dark:shadow-indigo-900/30 hover:shadow-2xl transition-all transform hover:-translate-y-1"
             >
               <Sparkles className="w-5 h-5 group-hover:rotate-12 transition-transform" />
-              ابدأ مجاناً
+              Get Started Free
               <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
             </button>
           )}
@@ -145,7 +142,7 @@ const Home: React.FC = () => {
             className="inline-flex items-center gap-2 px-8 py-4 text-lg font-semibold rounded-2xl text-gray-700 dark:text-slate-300 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 hover:bg-gray-50 dark:hover:bg-slate-700 shadow-md hover:shadow-lg transition-all transform hover:-translate-y-1"
           >
             <Library className="w-5 h-5" />
-            استعرض الكويزات
+            Browse Quizzes
           </Link>
         </motion.div>
       </section>
@@ -159,10 +156,10 @@ const Home: React.FC = () => {
           className="text-center"
         >
           <h2 className="text-3xl md:text-4xl font-extrabold text-gray-900 dark:text-white mb-3">
-            كل ما تحتاجه في مكان واحد
+            Everything You Need in One Place
           </h2>
           <p className="text-gray-500 dark:text-slate-400 text-lg max-w-2xl mx-auto">
-            ثلاث أدوات قوية مدعومة بالذكاء الاصطناعي لتعزيز تجربة التعلم
+            Three powerful AI-driven tools to supercharge your learning experience
           </p>
         </motion.div>
 
@@ -180,11 +177,10 @@ const Home: React.FC = () => {
               <div className={`w-16 h-16 bg-gradient-to-br ${feature.gradient} rounded-2xl flex items-center justify-center mb-6 shadow-lg group-hover:scale-110 transition-transform duration-300`}>
                 <feature.icon className="w-8 h-8 text-white" />
               </div>
-              <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-1">{feature.titleAr}</h3>
-              <p className="text-xs text-gray-400 dark:text-slate-500 mb-3 font-medium tracking-wide uppercase">{feature.title}</p>
+              <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-3">{feature.title}</h3>
               <p className="text-gray-600 dark:text-slate-400 leading-relaxed text-sm">{feature.description}</p>
               <div className="mt-6 flex items-center gap-2 text-indigo-600 dark:text-indigo-400 font-semibold text-sm group-hover:gap-3 transition-all">
-                <span>ابدأ الآن</span>
+                <span>Get Started</span>
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </div>
             </motion.div>
@@ -196,10 +192,10 @@ const Home: React.FC = () => {
       <section className="space-y-10">
         <div className="text-center">
           <h2 className="text-3xl md:text-4xl font-extrabold text-gray-900 dark:text-white mb-3">
-            كيف يعمل؟
+            How It Works
           </h2>
           <p className="text-gray-500 dark:text-slate-400 text-lg">
-            ثلاث خطوات بسيطة لإنشاء كويز احترافي
+            Three simple steps to create a professional quiz
           </p>
         </div>
 
@@ -236,7 +232,7 @@ const Home: React.FC = () => {
       <section className="space-y-6">
         <div className="text-center">
           <h2 className="text-2xl md:text-3xl font-extrabold text-gray-900 dark:text-white mb-3">
-            مميزات إضافية
+            More Features
           </h2>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -267,9 +263,9 @@ const Home: React.FC = () => {
         </div>
 
         <div className="relative space-y-3">
-          <h2 className="text-3xl md:text-4xl font-extrabold">جاهز لتعزيز تعلمك؟</h2>
+          <h2 className="text-3xl md:text-4xl font-extrabold">Ready to Level Up Your Learning?</h2>
           <p className="text-indigo-100 text-lg max-w-xl mx-auto">
-            انضم الآن وابدأ في إنشاء كويزات وخرائط ذهنية ذكية من أي محتوى تعليمي
+            Join now and start creating smart quizzes and mind maps from any educational content
           </p>
         </div>
 
@@ -281,14 +277,14 @@ const Home: React.FC = () => {
                 className="inline-flex items-center gap-2 px-8 py-4 bg-white text-indigo-600 font-bold rounded-2xl hover:bg-indigo-50 shadow-xl transition-all hover:-translate-y-1"
               >
                 <Sparkles className="w-5 h-5" />
-                أنشئ كويز
+                Create a Quiz
               </Link>
               <Link
                 to="/mindmaps/builder"
                 className="inline-flex items-center gap-2 px-8 py-4 bg-white/10 text-white font-bold rounded-2xl border border-white/30 hover:bg-white/20 transition-all hover:-translate-y-1"
               >
                 <Brain className="w-5 h-5" />
-                أنشئ خريطة ذهنية
+                Build a Mind Map
               </Link>
             </>
           ) : (
@@ -297,7 +293,7 @@ const Home: React.FC = () => {
               className="inline-flex items-center gap-2 px-10 py-4 bg-white text-indigo-600 font-bold text-lg rounded-2xl hover:bg-indigo-50 shadow-2xl transition-all hover:-translate-y-1"
             >
               <Sparkles className="w-5 h-5" />
-              ابدأ مجاناً الآن
+              Get Started Free
               <ArrowRight className="w-5 h-5" />
             </button>
           )}
@@ -306,15 +302,15 @@ const Home: React.FC = () => {
         <div className="relative flex justify-center gap-12 pt-2">
           <div className="text-center">
             <div className="text-3xl font-black">50+</div>
-            <div className="text-indigo-200 text-sm mt-1">لغة مدعومة</div>
+            <div className="text-indigo-200 text-sm mt-1">Languages</div>
           </div>
           <div className="text-center">
-            <div className="text-3xl font-black">30ث</div>
-            <div className="text-indigo-200 text-sm mt-1">لإنشاء كويز</div>
+            <div className="text-3xl font-black">30s</div>
+            <div className="text-indigo-200 text-sm mt-1">To Generate a Quiz</div>
           </div>
           <div className="text-center">
             <div className="text-3xl font-black">100%</div>
-            <div className="text-indigo-200 text-sm mt-1">مجاني</div>
+            <div className="text-indigo-200 text-sm mt-1">Free</div>
           </div>
         </div>
       </section>
