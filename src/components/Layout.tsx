@@ -196,11 +196,6 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           transition={{ duration: 0.3 }}
           className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8"
         >
-          <div className="mb-8 text-center animate-pulse">
-            <span className="text-2xl sm:text-4xl font-bold text-indigo-600 drop-shadow-sm font-amiri">
-              متنساش تصل على النبي ❤😊
-            </span>
-          </div>
           {children}
         </motion.div>
       </main>
