@@ -7,6 +7,7 @@ import Home from './pages/Home';
 import QuizBuilder from './pages/QuizBuilder';
 import QuizLibrary from './pages/QuizLibrary';
 import MindMapBuilder from './pages/MindMapBuilder';
+import MindMapEditor from './pages/MindMapEditor';
 import MindMapLibrary from './pages/MindMapLibrary';
 import QuizPlayer from './pages/QuizPlayer';
 import QuizResult from './pages/QuizResult';
@@ -144,6 +145,14 @@ export default function App() {
               element={
                 <ProtectedRoute>
                   <MindMapBuilder />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/mindmaps/editor"
+              element={
+                <ProtectedRoute>
+                  <MindMapEditor />
                 </ProtectedRoute>
               }
             />

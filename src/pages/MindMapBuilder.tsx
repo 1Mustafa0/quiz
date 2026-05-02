@@ -38,6 +38,7 @@ const MindMapBuilder: React.FC = () => {
     try {
       const data = await generateMindMap(topic.trim());
       setMapData(data);
+      navigate('/mindmaps/editor', { state: { mapData: data, category: category || 'General' } });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to generate mind map. Please try again.');
     } finally {
@@ -70,6 +71,7 @@ const MindMapBuilder: React.FC = () => {
       const data = await generateMindMapFromContent(text, selectedFile.name);
       setMapData(data);
       setTopic(data.topic);
+      navigate('/mindmaps/editor', { state: { mapData: data, category: category || 'General' } });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to process file. Please try again.');
     } finally {
