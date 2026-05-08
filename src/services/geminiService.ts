@@ -18,6 +18,7 @@ export interface QuizGenerationParams {
   numQuestions: number;
   language: string;
   difficulty: 'easy' | 'medium' | 'hard';
+  notes?: string;
 }
 
 export interface QuizGenerationResponse {
@@ -32,7 +33,8 @@ export const generateQuizFromContent = async (params: QuizGenerationParams): Pro
     throw new Error("تنبيه: لا يوجد مفتاح Gemini API. يرجى إضافة GEMINI_API_KEY في إعدادات Secrets.");
   }
 
-  const { content, image, numQuestions, language, difficulty } = params;
+  const { content, image, numQuestions, language, difficulty, notes } = params;
+  const isAuto = numQuestions === 0;
 
   if (!content && !image) {
     throw new Error("No content or image provided for quiz generation.");
@@ -42,21 +44,37 @@ export const generateQuizFromContent = async (params: QuizGenerationParams): Pro
     throw new Error("المحتوى المستخرج غير صالح أو قصير جداً لتوليد اختبار.");
   }
 
-  console.log("Generating quiz. Available keys:", totalKeys);
+  console.log("Generating quiz. Available keys:", totalKeys, "| Auto mode:", isAuto);
 
-  const prompt = `You are an expert quiz generator and content analyst. 
+  const questionCountInstruction = isAuto
+    ? `PHASE 2.5 — Optimal Count Decision:
+  Before writing any question, count every distinct concept, fact, definition, process, or key detail in the content.
+  Then decide the optimal number of questions that ensures full coverage without repetition.
+  Rules for your decision:
+  - Minimum: 3 questions.
+  - Maximum: 30 questions.
+  - Aim for complete, comprehensive coverage — every important point should be tested.
+  - Avoid trivial or duplicate questions.
+  Generate exactly as many questions as your analysis determines is optimal.`
+    : `Generate a high-quality quiz with exactly ${numQuestions} questions.`;
+
+  const notesInstruction = notes?.trim()
+    ? `\nUSER INSTRUCTIONS (follow these carefully when generating questions):\n"${notes.trim()}"\n`
+    : '';
+
+  const prompt = `You are an expert quiz generator and content analyst.
   
   PHASE 1: Deep Content Analysis
   First, thoroughly analyze the provided content/image. Identify all key concepts, definitions, processes, and important details. Ensure you have a complete understanding of the material before proceeding.
   
-  PHASE 2: MCQ Generation
+  ${questionCountInstruction}
+  
+  PHASE 3: MCQ Generation
   STRICT RULE 1: You MUST generate ONLY Multiple Choice Questions (MCQ). No true/false, no short-answer.
   STRICT RULE 2: You MUST generate the quiz questions ONLY from the provided content below. Every question must be directly answerable from the text or image provided.
   STRICT RULE 3: DO NOT ask meta-questions about the input text itself (e.g., "What is the text about?", "What is the exact text provided?", "How many words are in the content?"). Instead, ask about the SUBJECT MATTER (e.g., "What are the symptoms of liver cirrhosis?").
   STRICT RULE 4: If the content is garbage, nonsensical, or just "[object Object]", do not generate a quiz. Instead, return an error in the JSON structure.
-  
-  Generate a high-quality quiz with exactly ${numQuestions} questions based on the ${content ? 'content' : ''}${content && image ? ' and ' : ''}${image ? 'image' : ''} provided.
-  
+  ${notesInstruction}
   Also, provide a highly accurate and concise title (max 6 words) and a brief description (max 2 sentences) for this quiz. The title should capture the specific topic of the content (e.g., "Photosynthesis Basics" instead of "Science Quiz").
   
   IMPORTANT: The quiz, title, and description MUST be in the SAME language as the content/image provided. If the content is in Arabic, the title and description MUST be in Arabic.

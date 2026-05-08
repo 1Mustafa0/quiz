@@ -2,8 +2,24 @@
   "c4bca03b-ef92-47dd-83c5-b99cfa0a9bd2": {
     "sessionId": "c4bca03b-ef92-47dd-83c5-b99cfa0a9bd2",
     "firstVisit": 1778265175384,
-    "lastVisit": 1778265483415,
-    "visitCount": 6,
+    "lastVisit": 1778265764889,
+    "visitCount": 8,
     "isRegistered": false
+  },
+  "1ae9056a-6869-4472-a022-503253d80597": {
+    "sessionId": "1ae9056a-6869-4472-a022-503253d80597",
+    "firstVisit": 1778265633916,
+    "lastVisit": 1778265763065,
+    "visitCount": 6,
+    "isRegistered": true,
+    "uid": "gsU8IdYVsxgHdwdbsmDVh1ClzO92"
+  },
+  "8c328277-1029-4fcc-86f1-316e5e3ca899": {
+    "sessionId": "8c328277-1029-4fcc-86f1-316e5e3ca899",
+    "firstVisit": 1778265727181,
+    "lastVisit": 1778265746658,
+    "visitCount": 5,
+    "isRegistered": true,
+    "uid": "kZpuVtcIAxP4v3cGZbya5fsXr3p2"
   }
 }

@@ -4,7 +4,7 @@ import { useAuth } from '../AuthContext';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { collection, addDoc, updateDoc, doc, getDoc, Timestamp } from 'firebase/firestore';
 import { generateQuizFromContent, GeneratedQuestion } from '../services/geminiService';
-import { Upload, FileText, Plus, Trash2, Save, Sparkles, Loader2, AlertCircle, CheckCircle2, ArrowLeft, Pencil } from 'lucide-react';
+import { Upload, FileText, Plus, Trash2, Save, Sparkles, Loader2, AlertCircle, CheckCircle2, ArrowLeft, Pencil, MessageSquarePlus, ChevronDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ConfirmModal from '../components/ConfirmModal';
 import CategorySelect from '../components/CategorySelect';
@@ -107,7 +107,8 @@ const QuizBuilder: React.FC = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const [numQuestions, setNumQuestions] = useState(5);
   const [autoQuestions, setAutoQuestions] = useState(false);
-  const [autoPreview, setAutoPreview] = useState<number | null>(null);
+  const [notes, setNotes] = useState('');
+  const [showNotes, setShowNotes] = useState(false);
 
   const [activeTab, setActiveTab] = useState<'manual' | 'ai' | null>(isEditing ? 'manual' : null);
 
@@ -134,12 +135,6 @@ const QuizBuilder: React.FC = () => {
     };
     load();
   }, [quizId]);
-
-  const calculateOptimalQuestions = (text: string): number => {
-    const words = text.trim().split(/\s+/).filter(Boolean).length;
-    const optimal = Math.round(words / 120);
-    return Math.max(3, Math.min(30, optimal));
-  };
 
   const [manualText, setManualText] = useState('');
   const [useManualText, setUseManualText] = useState(false);
@@ -266,13 +261,12 @@ const QuizBuilder: React.FC = () => {
     setIsGenerating(true);
     setError(null);
     try {
-      const resolvedNum = autoQuestions ? calculateOptimalQuestions(manualText) : numQuestions;
-      if (autoQuestions) setNumQuestions(resolvedNum);
       const generated = await generateQuizFromContent({
         content: manualText,
-        numQuestions: resolvedNum,
+        numQuestions: autoQuestions ? 0 : numQuestions,
         language: 'detect',
         difficulty,
+        notes: notes.trim() || undefined,
       });
       
       setTitle(generated.title);
@@ -328,9 +322,10 @@ const QuizBuilder: React.FC = () => {
             data: base64Data,
             mimeType: file.type,
           },
-          numQuestions: autoQuestions ? 10 : numQuestions,
+          numQuestions: autoQuestions ? 0 : numQuestions,
           language: 'detect',
           difficulty,
+          notes: notes.trim() || undefined,
         });
 
         setTitle(generated.title);
@@ -381,14 +376,12 @@ const QuizBuilder: React.FC = () => {
           throw new Error('فشل استخراج النص من الملف. قد يكون الملف فارغاً أو عبارة عن صورة (في حالة الـ PDF). يرجى محاولة رفعه كصورة (JPG/PNG) إذا كان يحتوي على نص مصور.');
         }
 
-        const resolvedNum = autoQuestions ? calculateOptimalQuestions(text) : numQuestions;
-        if (autoQuestions) setNumQuestions(resolvedNum);
-
         const generated = await generateQuizFromContent({
           content: text,
-          numQuestions: resolvedNum,
+          numQuestions: autoQuestions ? 0 : numQuestions,
           language: 'detect',
           difficulty,
+          notes: notes.trim() || undefined,
         });
 
         setTitle(generated.title);
@@ -973,11 +966,11 @@ const QuizBuilder: React.FC = () => {
                               : 'bg-white text-gray-500 border-gray-300 hover:border-indigo-400'
                           }`}
                         >
-                          ✨ تلقائي
+                          ✨ تلقائي حسب الفهم
                         </button>
                         {autoQuestions ? (
                           <span className="text-xs text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">
-                            سيُحدَّد العدد بعد تحليل الملف
+                            سيقرر الذكاء الاصطناعي العدد المثالي
                           </span>
                         ) : (
                           <input
@@ -990,6 +983,34 @@ const QuizBuilder: React.FC = () => {
                           />
                         )}
                       </div>
+                      <div className="w-full mt-1" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={() => setShowNotes(!showNotes)}
+                          className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-indigo-500 transition-colors mx-auto"
+                        >
+                          <MessageSquarePlus className="w-3.5 h-3.5" />
+                          {showNotes ? 'إخفاء الملاحظات' : 'إضافة ملاحظات للذكاء الاصطناعي'}
+                          <ChevronDown className={`w-3 h-3 transition-transform ${showNotes ? 'rotate-180' : ''}`} />
+                        </button>
+                        <AnimatePresence>
+                          {showNotes && (
+                            <motion.div
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="overflow-hidden mt-2"
+                            >
+                              <textarea
+                                value={notes}
+                                onChange={(e) => setNotes(e.target.value)}
+                                placeholder="مثال: ركّز على الفصل الثالث فقط، أو تجاهل المقدمة، أو اجعل الأسئلة على التعريفات..."
+                                className="w-full px-3 py-2 border border-indigo-200 bg-white rounded-xl text-xs text-right focus:ring-2 focus:ring-indigo-400 outline-none resize-none h-20"
+                                dir="auto"
+                              />
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1001,6 +1022,39 @@ const QuizBuilder: React.FC = () => {
                     placeholder="Paste your text here to generate a quiz..."
                     className="w-full px-4 py-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all h-64 resize-none bg-white"
                   />
+
+                  {/* Notes Section */}
+                  <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+                    <button
+                      onClick={() => setShowNotes(!showNotes)}
+                      className="w-full flex items-center justify-between px-4 py-2.5 text-sm text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                    >
+                      <span className="flex items-center gap-2">
+                        <MessageSquarePlus className="w-4 h-4" />
+                        {notes.trim() ? `ملاحظات: "${notes.substring(0, 40)}${notes.length > 40 ? '...' : ''}"` : 'إضافة ملاحظات توجيهية للذكاء الاصطناعي'}
+                      </span>
+                      <ChevronDown className={`w-4 h-4 transition-transform ${showNotes ? 'rotate-180' : ''}`} />
+                    </button>
+                    <AnimatePresence>
+                      {showNotes && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="overflow-hidden"
+                        >
+                          <textarea
+                            value={notes}
+                            onChange={(e) => setNotes(e.target.value)}
+                            placeholder="مثال: ركّز على الفصل الثالث فقط · تجاهل المقدمة · اجعل الأسئلة على التعريفات والمصطلحات..."
+                            className="w-full px-4 py-3 border-t border-gray-100 bg-gray-50 text-sm focus:ring-2 focus:ring-indigo-400 outline-none resize-none h-24"
+                            dir="auto"
+                          />
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+
                   <div className="flex justify-between items-center flex-wrap gap-3">
                     <div className="flex items-center gap-3 flex-wrap">
                       <span className="text-sm text-gray-600">عدد الأسئلة:</span>
@@ -1012,13 +1066,11 @@ const QuizBuilder: React.FC = () => {
                             : 'bg-white text-gray-500 border-gray-300 hover:border-indigo-400'
                         }`}
                       >
-                        ✨ تلقائي
+                        ✨ تلقائي حسب الفهم
                       </button>
                       {autoQuestions ? (
                         <span className="text-xs text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg font-medium">
-                          {manualText.trim()
-                            ? `≈ ${calculateOptimalQuestions(manualText)} سؤال مقترح`
-                            : 'سيُحدَّد العدد بناءً على المحتوى'}
+                          سيقرر الذكاء الاصطناعي العدد المثالي
                         </span>
                       ) : (
                         <input
