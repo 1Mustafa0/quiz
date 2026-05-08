@@ -5,6 +5,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { createRequire } from 'module';
+import { GoogleGenAI } from '@google/genai';
 const require = createRequire(import.meta.url);
 const pdf = require('pdf-parse');
 const pdfParser = typeof pdf === 'function' ? pdf : pdf.default;
@@ -13,6 +14,66 @@ const mammoth = (mammothImport as any).default || mammothImport;
 import officeParserImport from 'officeparser';
 const officeParser = (officeParserImport as any).default || officeParserImport;
 import { parse as csvParse } from 'csv-parse/sync';
+
+const OCR_SYSTEM_PROMPT = `أنت نظام متخصص في استخراج النصوص من الملفات التعليمية.
+
+قد يكون الملف:
+- PDF يحتوي على نص حقيقي
+- PDF عبارة عن صور ممسوحة Scanner
+- صور داخل PDF
+- صفحات بجودة ضعيفة
+- عربي أو إنجليزي أو مختلط
+
+المطلوب:
+1. استخرج كل النصوص الممكنة من الملف.
+2. إذا فشل استخراج النص العادي استخدم OCR تلقائيًا.
+3. حاول فهم النص حتى مع أخطاء OCR.
+4. حافظ على ترتيب المحتوى والعناوين قدر الإمكان.
+5. تجاهل العلامات غير المفهومة والضوضاء.
+6. لا تلخص المحتوى.
+7. أعد النص بشكل نظيف ومنظم.
+8. أصلح أخطاء OCR الشائعة إن أمكن.
+9. إذا كانت الصفحة صورة فقط استخرج النص منها بالكامل.
+10. إذا وُجدت جداول أو نقاط حاول تحويلها لنص مفهوم.
+
+تعليمات مهمة:
+- لا تنشئ معلومات غير موجودة.
+- لا تشرح أي شيء.
+- الناتج يكون النص المستخرج فقط.
+- إذا كانت هناك أجزاء غير مقروءة ضع مكانها [غير واضح].`;
+
+async function extractWithGeminiOcr(buffer: Buffer, mimeType: string): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_1;
+  if (!apiKey) {
+    console.warn('[GeminiOCR] No API key found, skipping OCR');
+    return '';
+  }
+  try {
+    console.log(`[GeminiOCR] Sending ${mimeType} file (${buffer.length} bytes) to Gemini for OCR...`);
+    const ai = new GoogleGenAI({ apiKey });
+    const base64 = buffer.toString('base64');
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.0-flash',
+      contents: [{
+        parts: [
+          { text: OCR_SYSTEM_PROMPT },
+          { inlineData: { data: base64, mimeType } }
+        ]
+      }]
+    });
+    const result = response.text?.trim() || '';
+    console.log(`[GeminiOCR] Extracted ${result.length} chars`);
+    return result;
+  } catch (err: any) {
+    console.error('[GeminiOCR] Failed:', err?.message || err);
+    return '';
+  }
+}
+
+const IMAGE_MIME_TYPES = new Set([
+  'image/jpeg', 'image/jpg', 'image/png', 'image/webp',
+  'image/gif', 'image/bmp', 'image/tiff'
+]);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,7 +87,7 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('UNHANDLED REJECTION at:', promise, 'reason:', reason);
 });
 
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } }); // 20 MB limit
 
 async function startServer() {
   const app = express();
@@ -68,22 +129,39 @@ async function startServer() {
       }
 
       const { mimetype, buffer, originalname } = req.file;
+      const lowerName = originalname.toLowerCase();
       console.log(`Processing file: ${originalname}, size: ${buffer.length} bytes, type: ${mimetype}`);
       console.log('Buffer preview (hex):', buffer.slice(0, 20).toString('hex'));
       let text = '';
 
-      if (mimetype === 'application/pdf' || originalname.toLowerCase().endsWith('.pdf')) {
+      // ── Image files → Gemini OCR directly ─────────────────────
+      const isImage = IMAGE_MIME_TYPES.has(mimetype) ||
+        ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff'].some(e => lowerName.endsWith(e));
+
+      if (isImage) {
+        console.log('Image file detected — sending to Gemini OCR directly...');
+        const imageMime = mimetype.startsWith('image/') ? mimetype : `image/${lowerName.split('.').pop()}`;
+        text = await extractWithGeminiOcr(buffer, imageMime);
+      } else if (mimetype === 'application/pdf' || lowerName.endsWith('.pdf')) {
         console.log('Parsing PDF...');
         try {
           const data = await pdfParser(buffer);
           text = data?.text || '';
           console.log('PDF extraction result length:', text.length);
-          if (text.length < 50) {
-            console.log('PDF text too short, might be scanned. Preview:', text.substring(0, 100));
+          if (text.trim().length < 100) {
+            console.log('PDF text too short — likely scanned. Falling back to Gemini OCR...');
+            const ocrText = await extractWithGeminiOcr(buffer, 'application/pdf');
+            if (ocrText.length > text.trim().length) {
+              text = ocrText;
+              console.log('Gemini OCR improved result:', text.length, 'chars');
+            }
           }
         } catch (err: any) {
-          console.error('PDF Parse failed:', err);
-          text = buffer.toString('utf-8').replace(/[^\x20-\x7E\s]/g, '');
+          console.error('PDF Parse failed — trying Gemini OCR:', err?.message);
+          text = await extractWithGeminiOcr(buffer, 'application/pdf');
+          if (!text) {
+            text = buffer.toString('utf-8').replace(/[^\x20-\x7E\s]/g, '');
+          }
         }
       } else if (
         mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
@@ -198,7 +276,7 @@ async function startServer() {
         console.error('Extraction failed or resulted in too little text. Length:', text?.length);
         return res.status(400).json({ 
           error: 'Could not extract meaningful text from this file.',
-          details: `Detected type: ${mimetype}, Size: ${buffer.length} bytes, Extracted length: ${text?.length || 0}. The file might be empty, encrypted, or contain only images. If it is an image-based PDF, please try uploading it as an image file (JPG/PNG) instead.`
+          details: `Detected type: ${mimetype}, Size: ${buffer.length} bytes, Extracted length: ${text?.length || 0}. The file might be empty, encrypted, or in an unsupported format.`
         });
       }
 
