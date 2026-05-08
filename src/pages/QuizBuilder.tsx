@@ -106,6 +106,8 @@ const QuizBuilder: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [numQuestions, setNumQuestions] = useState(5);
+  const [autoQuestions, setAutoQuestions] = useState(false);
+  const [autoPreview, setAutoPreview] = useState<number | null>(null);
 
   const [activeTab, setActiveTab] = useState<'manual' | 'ai' | null>(isEditing ? 'manual' : null);
 
@@ -132,6 +134,12 @@ const QuizBuilder: React.FC = () => {
     };
     load();
   }, [quizId]);
+
+  const calculateOptimalQuestions = (text: string): number => {
+    const words = text.trim().split(/\s+/).filter(Boolean).length;
+    const optimal = Math.round(words / 120);
+    return Math.max(3, Math.min(30, optimal));
+  };
 
   const [manualText, setManualText] = useState('');
   const [useManualText, setUseManualText] = useState(false);
@@ -258,9 +266,11 @@ const QuizBuilder: React.FC = () => {
     setIsGenerating(true);
     setError(null);
     try {
+      const resolvedNum = autoQuestions ? calculateOptimalQuestions(manualText) : numQuestions;
+      if (autoQuestions) setNumQuestions(resolvedNum);
       const generated = await generateQuizFromContent({
         content: manualText,
-        numQuestions,
+        numQuestions: resolvedNum,
         language: 'detect',
         difficulty,
       });
@@ -318,7 +328,7 @@ const QuizBuilder: React.FC = () => {
             data: base64Data,
             mimeType: file.type,
           },
-          numQuestions,
+          numQuestions: autoQuestions ? 10 : numQuestions,
           language: 'detect',
           difficulty,
         });
@@ -371,9 +381,12 @@ const QuizBuilder: React.FC = () => {
           throw new Error('فشل استخراج النص من الملف. قد يكون الملف فارغاً أو عبارة عن صورة (في حالة الـ PDF). يرجى محاولة رفعه كصورة (JPG/PNG) إذا كان يحتوي على نص مصور.');
         }
 
+        const resolvedNum = autoQuestions ? calculateOptimalQuestions(text) : numQuestions;
+        if (autoQuestions) setNumQuestions(resolvedNum);
+
         const generated = await generateQuizFromContent({
           content: text,
-          numQuestions,
+          numQuestions: resolvedNum,
           language: 'detect',
           difficulty,
         });
@@ -950,16 +963,32 @@ const QuizBuilder: React.FC = () => {
                         <p className="text-lg font-semibold text-gray-900">Click to upload or drag and drop</p>
                         <p className="text-sm text-gray-500">PDF, Word, Images, or CSV (Max 50MB)</p>
                       </div>
-                      <div className="flex items-center space-x-2 pt-2" onClick={(e) => e.stopPropagation()}>
-                        <span className="text-sm text-gray-600">Questions:</span>
-                        <input
-                          type="number"
-                          min="1"
-                          max="20"
-                          value={numQuestions}
-                          onChange={(e) => setNumQuestions(parseInt(e.target.value) || 5)}
-                          className="w-16 px-2 py-1 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-indigo-500"
-                        />
+                      <div className="flex items-center gap-3 pt-2 flex-wrap justify-center" onClick={(e) => e.stopPropagation()}>
+                        <span className="text-sm text-gray-600">عدد الأسئلة:</span>
+                        <button
+                          onClick={() => setAutoQuestions(!autoQuestions)}
+                          className={`px-3 py-1 rounded-lg text-xs font-semibold border transition-all ${
+                            autoQuestions
+                              ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                              : 'bg-white text-gray-500 border-gray-300 hover:border-indigo-400'
+                          }`}
+                        >
+                          ✨ تلقائي
+                        </button>
+                        {autoQuestions ? (
+                          <span className="text-xs text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">
+                            سيُحدَّد العدد بعد تحليل الملف
+                          </span>
+                        ) : (
+                          <input
+                            type="number"
+                            min="1"
+                            max="30"
+                            value={numQuestions}
+                            onChange={(e) => setNumQuestions(parseInt(e.target.value) || 5)}
+                            className="w-16 px-2 py-1 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-indigo-500"
+                          />
+                        )}
                       </div>
                     </div>
                   )}
@@ -972,17 +1001,35 @@ const QuizBuilder: React.FC = () => {
                     placeholder="Paste your text here to generate a quiz..."
                     className="w-full px-4 py-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all h-64 resize-none bg-white"
                   />
-                  <div className="flex justify-end items-center space-x-4">
-                    <div className="flex items-center space-x-2">
-                      <span className="text-sm text-gray-600">Questions:</span>
-                      <input
-                        type="number"
-                        min="1"
-                        max="20"
-                        value={numQuestions}
-                        onChange={(e) => setNumQuestions(parseInt(e.target.value) || 5)}
-                        className="w-16 px-2 py-1 border border-gray-200 rounded text-sm"
-                      />
+                  <div className="flex justify-between items-center flex-wrap gap-3">
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <span className="text-sm text-gray-600">عدد الأسئلة:</span>
+                      <button
+                        onClick={() => setAutoQuestions(!autoQuestions)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+                          autoQuestions
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                            : 'bg-white text-gray-500 border-gray-300 hover:border-indigo-400'
+                        }`}
+                      >
+                        ✨ تلقائي
+                      </button>
+                      {autoQuestions ? (
+                        <span className="text-xs text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg font-medium">
+                          {manualText.trim()
+                            ? `≈ ${calculateOptimalQuestions(manualText)} سؤال مقترح`
+                            : 'سيُحدَّد العدد بناءً على المحتوى'}
+                        </span>
+                      ) : (
+                        <input
+                          type="number"
+                          min="1"
+                          max="30"
+                          value={numQuestions}
+                          onChange={(e) => setNumQuestions(parseInt(e.target.value) || 5)}
+                          className="w-16 px-2 py-1.5 border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      )}
                     </div>
                     <button
                       onClick={handleGenerateFromManualText}
