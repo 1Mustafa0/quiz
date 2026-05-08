@@ -103,43 +103,19 @@ function generateSessionId(): string {
 export async function trackVisit(uid?: string): Promise<void> {
   try {
     let sessionId = localStorage.getItem(VISITOR_SESSION_KEY);
-    const isNew = !sessionId;
-
     if (!sessionId) {
       sessionId = generateSessionId();
       localStorage.setItem(VISITOR_SESSION_KEY, sessionId);
     }
-
-    const visitorRef = doc(db, 'visitors', sessionId);
-    const now = Timestamp.now();
-
-    const baseData = {
-      sessionId,
-      firstVisit: now,
-      lastVisit: now,
-      visitCount: 1,
-      isRegistered: !!uid,
-      ...(uid ? { uid } : {}),
-    };
-
-    if (isNew) {
-      await setDoc(visitorRef, baseData).catch((err) => {
-        console.warn('[trackVisit] Failed to create visitor doc:', err?.code, err?.message);
-      });
-    } else {
-      await updateDoc(visitorRef, {
-        lastVisit: now,
-        visitCount: increment(1),
-        ...(uid ? { isRegistered: true, uid } : {}),
-      }).catch(async () => {
-        // Doc may not exist yet — create it
-        await setDoc(visitorRef, baseData).catch((err) => {
-          console.warn('[trackVisit] Failed to upsert visitor doc:', err?.code, err?.message);
-        });
-      });
-    }
+    await fetch('/api/track-visit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, ...(uid ? { uid } : {}) }),
+    }).catch((err) => {
+      console.warn('[trackVisit] Server call failed:', err?.message);
+    });
   } catch (e: any) {
-    console.warn('[trackVisit] Unexpected error:', e?.code, e?.message);
+    console.warn('[trackVisit] Unexpected error:', e?.message);
   }
 }
 

@@ -25,8 +25,8 @@ interface Quiz {
 
 interface VisitorDoc {
   sessionId: string;
-  firstVisit: Timestamp;
-  lastVisit: Timestamp;
+  firstVisit: number | Timestamp;
+  lastVisit: number | Timestamp;
   visitCount: number;
   isRegistered: boolean;
   uid?: string;
@@ -51,15 +51,23 @@ const startOfWeek = () => {
   return Timestamp.fromDate(d);
 };
 
-function formatDate(ts: Timestamp | null | undefined): string {
-  if (!ts || !ts.seconds) return '—';
-  const d = new Date(ts.seconds * 1000);
-  return d.toLocaleString('ar-EG', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+function toMs(ts: Timestamp | number | null | undefined): number | null {
+  if (!ts) return null;
+  if (typeof ts === 'number') return ts;
+  if (typeof (ts as Timestamp).seconds === 'number') return (ts as Timestamp).seconds * 1000;
+  return null;
 }
 
-function timeAgo(ts: Timestamp | null | undefined): string {
-  if (!ts || !ts.seconds) return '—';
-  const diff = Math.floor((Date.now() / 1000) - ts.seconds);
+function formatDate(ts: Timestamp | number | null | undefined): string {
+  const ms = toMs(ts);
+  if (!ms) return '—';
+  return new Date(ms).toLocaleString('ar-EG', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+function timeAgo(ts: Timestamp | number | null | undefined): string {
+  const ms = toMs(ts);
+  if (!ms) return '—';
+  const diff = Math.floor((Date.now() - ms) / 1000);
   if (diff < 60) return 'الآن';
   if (diff < 3600) return `${Math.floor(diff / 60)} د`;
   if (diff < 86400) return `${Math.floor(diff / 3600)} س`;
@@ -87,6 +95,35 @@ const AdminDashboard: React.FC = () => {
     onConfirm: () => void; type: 'danger' | 'info' | 'warning';
   }>({ isOpen: false, title: '', message: '', onConfirm: () => {}, type: 'info' });
 
+  const fetchVisitors = React.useCallback(async () => {
+    if (!user) return;
+    try {
+      const idToken = await user.getIdToken();
+      const res = await fetch('/api/admin/visitors', {
+        headers: { 'Authorization': `Bearer ${idToken}` },
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setVisitorsError(err.error || res.statusText);
+        return;
+      }
+      const data = await res.json();
+      const vList: VisitorDoc[] = data.visitors || [];
+      setVisitors(vList);
+      setVisitorsError(null);
+      const todayMs = startOfDay().seconds * 1000;
+      setStats(prev => ({
+        ...prev,
+        totalVisitors: vList.length,
+        newVisitorsToday: vList.filter(v => (toMs(v.firstVisit) || 0) >= todayMs).length,
+        activeToday: vList.filter(v => (toMs(v.lastVisit) || 0) >= todayMs).length,
+        registeredVisitors: vList.filter(v => v.isRegistered).length,
+      }));
+    } catch (e: any) {
+      setVisitorsError(e.message);
+    }
+  }, [user]);
+
   useEffect(() => {
     if (role !== 'admin') return;
 
@@ -109,26 +146,12 @@ const AdminDashboard: React.FC = () => {
       setLoading(false);
     }, err => { console.error('quizzes listener:', err.message); setLoading(false); });
 
-    // ── Real-time: visitors ──
-    const visitorsUnsub = onSnapshot(collection(db, 'visitors'), (snap) => {
-      const vList = snap.docs.map(d => d.data() as VisitorDoc);
-      setVisitors(vList);
-      setVisitorsError(null);
-      const todayTs = startOfDay();
-      setStats(prev => ({
-        ...prev,
-        totalVisitors: vList.length,
-        newVisitorsToday: vList.filter(v => v.firstVisit?.seconds >= todayTs.seconds).length,
-        activeToday: vList.filter(v => v.lastVisit?.seconds >= todayTs.seconds).length,
-        registeredVisitors: vList.filter(v => v.isRegistered).length,
-      }));
-    }, err => {
-      console.error('visitors listener:', err.message);
-      setVisitorsError(err.message);
-    });
+    // ── Server API: visitors (poll every 30s) ──
+    fetchVisitors();
+    const visitorsInterval = setInterval(fetchVisitors, 30000);
 
-    return () => { usersUnsub(); quizzesUnsub(); visitorsUnsub(); };
-  }, [role]);
+    return () => { usersUnsub(); quizzesUnsub(); clearInterval(visitorsInterval); };
+  }, [role, fetchVisitors]);
 
   if (authLoading) return null;
   if (role !== 'admin') return <Navigate to="/" />;
@@ -189,7 +212,7 @@ const AdminDashboard: React.FC = () => {
       v.sessionId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       v.uid?.toLowerCase().includes(searchTerm.toLowerCase())
     )
-    .sort((a, b) => (b.lastVisit?.seconds || 0) - (a.lastVisit?.seconds || 0));
+    .sort((a, b) => (toMs(b.lastVisit) || 0) - (toMs(a.lastVisit) || 0));
 
   const statCards = [
     { label: 'إجمالي المستخدمين', value: stats.totalUsers, icon: Users, color: 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400', border: 'border-indigo-100 dark:border-indigo-800' },

@@ -78,6 +78,65 @@ const IMAGE_MIME_TYPES = new Set([
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// ── Firebase config (for REST API) ──────────────────────────────
+const FIREBASE_API_KEY = 'AIzaSyDlBOAtBLI1raPJ1XNQ1MJrTbvGJ5Jtl5w';
+const FIREBASE_PROJECT_ID = 'gen-lang-client-0923522692';
+const FIREBASE_DB_ID = 'ai-studio-83d42d29-f235-425e-b6a4-00ed46c00c2f';
+const ADMIN_EMAIL = 'mstfyalswdany913@gmail.com';
+
+// ── Server-side Visitor Store ────────────────────────────────────
+const VISITORS_FILE = path.join(process.cwd(), '.visitors.json');
+
+interface VisitorRecord {
+  sessionId: string;
+  firstVisit: number;
+  lastVisit: number;
+  visitCount: number;
+  isRegistered: boolean;
+  uid?: string;
+}
+
+let visitorStore: Map<string, VisitorRecord> = new Map();
+
+function loadVisitors() {
+  try {
+    if (fs.existsSync(VISITORS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(VISITORS_FILE, 'utf-8'));
+      visitorStore = new Map(Object.entries(data));
+      console.log(`[Visitors] Loaded ${visitorStore.size} visitor records`);
+    }
+  } catch (e) {
+    console.warn('[Visitors] Could not load visitors file:', e);
+  }
+}
+
+function saveVisitors() {
+  try {
+    fs.writeFileSync(VISITORS_FILE, JSON.stringify(Object.fromEntries(visitorStore), null, 2));
+  } catch (e) {
+    console.warn('[Visitors] Could not save visitors file:', e);
+  }
+}
+
+loadVisitors();
+
+// ── Firebase token verification (REST API) ───────────────────────
+async function verifyFirebaseToken(idToken: string): Promise<{ uid: string; email: string } | null> {
+  try {
+    const res = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${FIREBASE_API_KEY}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken }) }
+    );
+    const data: any = await res.json();
+    const user = data.users?.[0];
+    if (!user?.localId) return null;
+    return { uid: user.localId, email: user.email || '' };
+  } catch {
+    return null;
+  }
+}
+
 // Global error handlers to prevent process crashes
 process.on('uncaughtException', (err) => {
   console.error('UNCAUGHT EXCEPTION:', err);
@@ -99,6 +158,90 @@ async function startServer() {
   const hasDist = fs.existsSync(distPath);
 
   app.use(express.json());
+
+  // ── Visitor tracking (server-side, bypasses Firestore rules) ──
+  app.post('/api/track-visit', express.json(), (req: any, res: any) => {
+    try {
+      const { sessionId, uid } = req.body || {};
+      if (!sessionId || typeof sessionId !== 'string') {
+        return res.status(400).json({ error: 'sessionId required' });
+      }
+      const now = Date.now();
+      const existing = visitorStore.get(sessionId);
+      if (existing) {
+        existing.lastVisit = now;
+        existing.visitCount += 1;
+        if (uid) { existing.isRegistered = true; existing.uid = uid; }
+      } else {
+        visitorStore.set(sessionId, {
+          sessionId, firstVisit: now, lastVisit: now,
+          visitCount: 1, isRegistered: !!uid, ...(uid ? { uid } : {}),
+        });
+      }
+      saveVisitors();
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Admin: get all visitors ─────────────────────────────────────
+  app.get('/api/admin/visitors', async (req: any, res: any) => {
+    try {
+      const idToken = (req.headers.authorization || '').replace('Bearer ', '');
+      if (!idToken) return res.status(401).json({ error: 'unauthorized' });
+      const tokenUser = await verifyFirebaseToken(idToken);
+      if (!tokenUser || tokenUser.email !== ADMIN_EMAIL) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      res.json({ visitors: Array.from(visitorStore.values()) });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Create/update user profile via Firestore REST API ──────────
+  app.post('/api/user/ensure-profile', express.json(), async (req: any, res: any) => {
+    try {
+      const idToken = (req.headers.authorization || '').replace('Bearer ', '');
+      if (!idToken) return res.status(401).json({ error: 'unauthorized' });
+
+      const tokenUser = await verifyFirebaseToken(idToken);
+      if (!tokenUser) return res.status(401).json({ error: 'invalid token' });
+
+      const { profileData } = req.body || {};
+      if (!profileData?.uid) return res.status(400).json({ error: 'profileData.uid required' });
+      if (profileData.uid !== tokenUser.uid) return res.status(403).json({ error: 'uid mismatch' });
+
+      const now = new Date().toISOString();
+      const fields: Record<string, any> = {
+        uid:         { stringValue: profileData.uid },
+        email:       { stringValue: profileData.email || '' },
+        displayName: { stringValue: profileData.displayName || '' },
+        photoURL:    profileData.photoURL ? { stringValue: profileData.photoURL } : { nullValue: null },
+        role:        { stringValue: profileData.role || 'user' },
+        createdAt:   { timestampValue: now },
+      };
+
+      const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/${FIREBASE_DB_ID}/documents/users/${profileData.uid}`;
+      const fsRes = await fetch(url, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
+        body: JSON.stringify({ fields }),
+      });
+      const fsData: any = await fsRes.json();
+
+      if (!fsRes.ok) {
+        console.error('[ensure-profile] Firestore REST failed:', fsData?.error?.message);
+        return res.status(fsRes.status).json({ error: fsData?.error?.message || 'Firestore write failed' });
+      }
+
+      console.log('[ensure-profile] Profile saved for uid:', profileData.uid);
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
 
   // Health check route
   app.get('/api/health', (req, res) => {

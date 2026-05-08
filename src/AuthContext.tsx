@@ -60,9 +60,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               createdAt: Timestamp.now(),
             };
 
-            await setDoc(userRef, newProfile).catch((err) => {
-              console.error('[AuthContext] Failed to create user profile:', err?.code, err?.message, JSON.stringify(newProfile));
-            });
+            const firestoreOk = await setDoc(userRef, newProfile)
+              .then(() => true)
+              .catch((err) => {
+                console.warn('[AuthContext] Direct Firestore write failed:', err?.code, err?.message, '— trying server fallback');
+                return false;
+              });
+
+            if (!firestoreOk) {
+              try {
+                const idToken = await firebaseUser.getIdToken();
+                const res = await fetch('/api/user/ensure-profile', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
+                  body: JSON.stringify({ profileData: { ...newProfile, createdAt: undefined } }),
+                });
+                if (!res.ok) {
+                  const err = await res.json().catch(() => ({}));
+                  console.error('[AuthContext] Server profile fallback failed:', err?.error);
+                } else {
+                  console.log('[AuthContext] Profile created via server fallback for uid:', firebaseUser.uid);
+                }
+              } catch (fallbackErr: any) {
+                console.error('[AuthContext] Server fallback error:', fallbackErr?.message);
+              }
+            }
 
             setShowWelcome(true);
           }
