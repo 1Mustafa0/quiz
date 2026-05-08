@@ -61,7 +61,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             };
 
             await setDoc(userRef, newProfile).catch((err) => {
-              console.error('Failed to create user profile:', err);
+              console.error('[AuthContext] Failed to create user profile:', err?.code, err?.message, JSON.stringify(newProfile));
             });
 
             setShowWelcome(true);

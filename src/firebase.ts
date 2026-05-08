@@ -113,33 +113,33 @@ export async function trackVisit(uid?: string): Promise<void> {
     const visitorRef = doc(db, 'visitors', sessionId);
     const now = Timestamp.now();
 
+    const baseData = {
+      sessionId,
+      firstVisit: now,
+      lastVisit: now,
+      visitCount: 1,
+      isRegistered: !!uid,
+      ...(uid ? { uid } : {}),
+    };
+
     if (isNew) {
-      await setDoc(visitorRef, {
-        sessionId,
-        firstVisit: now,
-        lastVisit: now,
-        visitCount: 1,
-        isRegistered: !!uid,
-        ...(uid ? { uid } : {}),
+      await setDoc(visitorRef, baseData).catch((err) => {
+        console.warn('[trackVisit] Failed to create visitor doc:', err?.code, err?.message);
       });
     } else {
       await updateDoc(visitorRef, {
         lastVisit: now,
         visitCount: increment(1),
         ...(uid ? { isRegistered: true, uid } : {}),
-      }).catch(() => {
-        setDoc(visitorRef, {
-          sessionId,
-          firstVisit: now,
-          lastVisit: now,
-          visitCount: 1,
-          isRegistered: !!uid,
-          ...(uid ? { uid } : {}),
-        }).catch(() => {});
+      }).catch(async () => {
+        // Doc may not exist yet — create it
+        await setDoc(visitorRef, baseData).catch((err) => {
+          console.warn('[trackVisit] Failed to upsert visitor doc:', err?.code, err?.message);
+        });
       });
     }
-  } catch (e) {
-    // Silently fail — tracking should never break the app
+  } catch (e: any) {
+    console.warn('[trackVisit] Unexpected error:', e?.code, e?.message);
   }
 }
 
