@@ -9,17 +9,31 @@
   "1ae9056a-6869-4472-a022-503253d80597": {
     "sessionId": "1ae9056a-6869-4472-a022-503253d80597",
     "firstVisit": 1778265633916,
-    "lastVisit": 1778265763065,
-    "visitCount": 6,
+    "lastVisit": 1778266039899,
+    "visitCount": 15,
     "isRegistered": true,
     "uid": "gsU8IdYVsxgHdwdbsmDVh1ClzO92"
   },
   "8c328277-1029-4fcc-86f1-316e5e3ca899": {
     "sessionId": "8c328277-1029-4fcc-86f1-316e5e3ca899",
     "firstVisit": 1778265727181,
-    "lastVisit": 1778265746658,
-    "visitCount": 5,
+    "lastVisit": 1778331835622,
+    "visitCount": 10,
     "isRegistered": true,
-    "uid": "kZpuVtcIAxP4v3cGZbya5fsXr3p2"
+    "uid": "YS7mWCdZcMeUDF3aJK2kxNHNVSq1"
+  },
+  "80c74630-aaf6-4f88-89a3-96eb67c87d12": {
+    "sessionId": "80c74630-aaf6-4f88-89a3-96eb67c87d12",
+    "firstVisit": 1778267842605,
+    "lastVisit": 1778279044055,
+    "visitCount": 4,
+    "isRegistered": false
+  },
+  "dd23cc30-ed9f-4eac-be24-eba1f89cd3c3": {
+    "sessionId": "dd23cc30-ed9f-4eac-be24-eba1f89cd3c3",
+    "firstVisit": 1778332123191,
+    "lastVisit": 1778332179647,
+    "visitCount": 6,
+    "isRegistered": false
   }
 }

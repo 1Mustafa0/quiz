@@ -26,6 +26,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isQuizActive, setIsQuizActive] = useState(false);
   const [showWelcome, setShowWelcome] = useState(false);
 
+  // Sync user to server-side store (always called on sign-in)
+  const syncUserToServer = async (firebaseUser: any, role: string) => {
+    try {
+      const idToken = await firebaseUser.getIdToken();
+      await fetch('/api/user/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
+        body: JSON.stringify({
+          uid: firebaseUser.uid,
+          email: firebaseUser.email || '',
+          displayName: firebaseUser.displayName || '',
+          photoURL: firebaseUser.photoURL || null,
+          role,
+        }),
+      }).catch((e) => console.warn('[AuthContext] sync failed:', e?.message));
+    } catch (e: any) {
+      console.warn('[AuthContext] syncUserToServer error:', e?.message);
+    }
+  };
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
@@ -91,6 +111,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } catch (err) {
           console.error('Auth profile error:', err);
         }
+
+        // Always sync to server-side store so admin can see all users
+        syncUserToServer(firebaseUser, userRole);
 
         setRole(userRole);
       } else {

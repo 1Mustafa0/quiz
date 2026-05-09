@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { collection, query, onSnapshot, deleteDoc, doc, updateDoc, Timestamp } from 'firebase/firestore';
-import { Users, BookOpen, Trash2, Shield, ShieldAlert, Search, Mail, X, Check, TrendingUp, UserPlus, Eye, UserCheck, RefreshCw, Clock, Globe } from 'lucide-react';
+import { deleteDoc, doc, updateDoc, Timestamp } from 'firebase/firestore';
+import { Users, BookOpen, Trash2, Shield, ShieldAlert, Search, Mail, TrendingUp, UserPlus, Eye, UserCheck, RefreshCw, Globe } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../AuthContext';
 import { Navigate, Link } from 'react-router-dom';
@@ -95,13 +95,69 @@ const AdminDashboard: React.FC = () => {
     onConfirm: () => void; type: 'danger' | 'info' | 'warning';
   }>({ isOpen: false, title: '', message: '', onConfirm: () => {}, type: 'info' });
 
-  const fetchVisitors = React.useCallback(async () => {
-    if (!user) return;
+  const getIdToken = React.useCallback(async () => {
+    if (!user) return null;
+    try { return await user.getIdToken(); } catch { return null; }
+  }, [user]);
+
+  const fetchUsers = React.useCallback(async () => {
+    const idToken = await getIdToken();
+    if (!idToken) return;
     try {
-      const idToken = await user.getIdToken();
-      const res = await fetch('/api/admin/visitors', {
-        headers: { 'Authorization': `Bearer ${idToken}` },
-      });
+      const res = await fetch('/api/admin/users', { headers: { Authorization: `Bearer ${idToken}` } });
+      if (!res.ok) return;
+      const data = await res.json();
+      const list: UserProfile[] = (data.users || []).map((u: any) => ({
+        uid: u.uid,
+        email: u.email || '',
+        displayName: u.displayName || '',
+        role: u.role || 'user',
+        createdAt: u.createdAt || null,
+      }));
+      setUsers(list);
+      const todayMs = startOfDay().seconds * 1000;
+      const weekMs = startOfWeek().seconds * 1000;
+      const toMs2 = (v: any) => {
+        if (!v) return 0;
+        if (typeof v === 'number') return v;
+        if (typeof v === 'string') return new Date(v).getTime() || 0;
+        if (v?.seconds) return v.seconds * 1000;
+        return 0;
+      };
+      setStats(prev => ({
+        ...prev,
+        totalUsers: list.length,
+        newUsersToday: list.filter(u => toMs2(u.createdAt) >= todayMs).length,
+        newUsersWeek:  list.filter(u => toMs2(u.createdAt) >= weekMs).length,
+      }));
+    } catch (e: any) {
+      console.error('[admin] fetchUsers error:', e.message);
+    }
+  }, [getIdToken]);
+
+  const fetchQuizzes = React.useCallback(async () => {
+    const idToken = await getIdToken();
+    if (!idToken) return;
+    try {
+      const res = await fetch('/api/admin/quizzes', { headers: { Authorization: `Bearer ${idToken}` } });
+      if (!res.ok) {
+        // Fallback: try direct Firestore onSnapshot (might work if rules are deployed)
+        return;
+      }
+      const data = await res.json();
+      setQuizzes(data.quizzes || []);
+    } catch (e: any) {
+      console.error('[admin] fetchQuizzes error:', e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [getIdToken]);
+
+  const fetchVisitors = React.useCallback(async () => {
+    const idToken = await getIdToken();
+    if (!idToken) return;
+    try {
+      const res = await fetch('/api/admin/visitors', { headers: { Authorization: `Bearer ${idToken}` } });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         setVisitorsError(err.error || res.statusText);
@@ -116,42 +172,31 @@ const AdminDashboard: React.FC = () => {
         ...prev,
         totalVisitors: vList.length,
         newVisitorsToday: vList.filter(v => (toMs(v.firstVisit) || 0) >= todayMs).length,
-        activeToday: vList.filter(v => (toMs(v.lastVisit) || 0) >= todayMs).length,
+        activeToday:      vList.filter(v => (toMs(v.lastVisit)  || 0) >= todayMs).length,
         registeredVisitors: vList.filter(v => v.isRegistered).length,
       }));
     } catch (e: any) {
       setVisitorsError(e.message);
     }
-  }, [user]);
+  }, [getIdToken]);
 
   useEffect(() => {
     if (role !== 'admin') return;
 
-    // ── Real-time: users ──
-    const usersUnsub = onSnapshot(collection(db, 'users'), (snap) => {
-      const list = snap.docs.map(d => ({ uid: d.id, ...d.data() } as UserProfile));
-      setUsers(list);
-      const todayTs = startOfDay(); const weekTs = startOfWeek();
-      setStats(prev => ({
-        ...prev,
-        totalUsers: list.length,
-        newUsersToday: list.filter(u => u.createdAt?.seconds >= todayTs.seconds).length,
-        newUsersWeek: list.filter(u => u.createdAt?.seconds >= weekTs.seconds).length,
-      }));
-    }, err => console.error('users listener:', err.message));
-
-    // ── Real-time: quizzes ──
-    const quizzesUnsub = onSnapshot(collection(db, 'quizzes'), (snap) => {
-      setQuizzes(snap.docs.map(d => ({ id: d.id, ...d.data() } as Quiz)));
-      setLoading(false);
-    }, err => { console.error('quizzes listener:', err.message); setLoading(false); });
-
-    // ── Server API: visitors (poll every 30s) ──
+    // Initial fetch for all three data sources
+    fetchUsers();
+    fetchQuizzes();
     fetchVisitors();
-    const visitorsInterval = setInterval(fetchVisitors, 30000);
 
-    return () => { usersUnsub(); quizzesUnsub(); clearInterval(visitorsInterval); };
-  }, [role, fetchVisitors]);
+    // Poll every 30s
+    const interval = setInterval(() => {
+      fetchUsers();
+      fetchQuizzes();
+      fetchVisitors();
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [role, fetchUsers, fetchQuizzes, fetchVisitors]);
 
   if (authLoading) return null;
   if (role !== 'admin') return <Navigate to="/" />;
@@ -229,6 +274,13 @@ const AdminDashboard: React.FC = () => {
     { key: 'visitors' as const, label: `الزوار`, count: visitors.length, icon: Eye },
   ];
 
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const handleRefreshAll = async () => {
+    setIsRefreshing(true);
+    await Promise.all([fetchUsers(), fetchQuizzes(), fetchVisitors()]);
+    setIsRefreshing(false);
+  };
+
   return (
     <div className="space-y-8">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -242,6 +294,14 @@ const AdminDashboard: React.FC = () => {
             </span>
           </p>
         </div>
+        <button
+          onClick={handleRefreshAll}
+          disabled={isRefreshing}
+          className="inline-flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-xl text-sm font-medium text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors shadow-sm disabled:opacity-50"
+        >
+          <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+          تحديث البيانات
+        </button>
       </div>
 
       {/* Stats Grid */}
@@ -346,7 +406,10 @@ const AdminDashboard: React.FC = () => {
                           </span>
                         </td>
                         <td className="px-6 py-4 text-sm text-gray-500 dark:text-slate-400">
-                          {u.createdAt ? new Date(u.createdAt.seconds * 1000).toLocaleDateString('ar-EG') : '—'}
+                          {u.createdAt ? (() => {
+                            const ms = typeof u.createdAt === 'string' ? new Date(u.createdAt).getTime() : (u.createdAt?.seconds ? u.createdAt.seconds * 1000 : 0);
+                            return ms ? new Date(ms).toLocaleDateString('ar-EG') : '—';
+                          })() : '—'}
                         </td>
                         <td className="px-6 py-4 text-right">
                           <div className="flex items-center justify-end space-x-2">

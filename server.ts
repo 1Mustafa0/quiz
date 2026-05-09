@@ -120,6 +120,74 @@ function saveVisitors() {
 
 loadVisitors();
 
+// ── Server-side User Store ────────────────────────────────────────
+const USERS_FILE = path.join(process.cwd(), '.users.json');
+
+interface UserRecord {
+  uid: string;
+  email: string;
+  displayName: string;
+  photoURL?: string | null;
+  role: string;
+  createdAt: string;
+}
+
+let userStore: Map<string, UserRecord> = new Map();
+
+function loadUsers() {
+  try {
+    if (fs.existsSync(USERS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(USERS_FILE, 'utf-8'));
+      userStore = new Map(Object.entries(data));
+      console.log(`[Users] Loaded ${userStore.size} user records`);
+    }
+  } catch (e) {
+    console.warn('[Users] Could not load users file:', e);
+  }
+}
+
+function saveUsersStore() {
+  try {
+    fs.writeFileSync(USERS_FILE, JSON.stringify(Object.fromEntries(userStore), null, 2));
+  } catch (e) {
+    console.warn('[Users] Could not save users file:', e);
+  }
+}
+
+loadUsers();
+
+// Helper: parse Firestore REST document fields to plain object
+function parseFirestoreDoc(doc: any): Record<string, any> {
+  const fields = doc.fields || {};
+  const result: Record<string, any> = {};
+  for (const [key, val] of Object.entries(fields as Record<string, any>)) {
+    if (val.stringValue !== undefined) result[key] = val.stringValue;
+    else if (val.integerValue !== undefined) result[key] = Number(val.integerValue);
+    else if (val.doubleValue !== undefined) result[key] = val.doubleValue;
+    else if (val.booleanValue !== undefined) result[key] = val.booleanValue;
+    else if (val.timestampValue !== undefined) result[key] = val.timestampValue;
+    else if (val.nullValue !== undefined) result[key] = null;
+    else if (val.arrayValue !== undefined) result[key] = (val.arrayValue.values || []).map((v: any) => parseFirestoreDoc({ fields: { _: v } })._);
+    else if (val.mapValue !== undefined) result[key] = parseFirestoreDoc(val.mapValue);
+  }
+  return result;
+}
+
+// Helper: fetch a Firestore collection via REST API (using any auth token)
+async function fetchFirestoreCollection(collection: string, idToken: string, pageSize = 500): Promise<any[]> {
+  const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/${FIREBASE_DB_ID}/documents/${collection}?pageSize=${pageSize}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${idToken}` } });
+  if (!res.ok) {
+    const err: any = await res.json().catch(() => ({}));
+    throw new Error(err?.error?.message || `Firestore REST ${res.status}`);
+  }
+  const data: any = await res.json();
+  return (data.documents || []).map((doc: any) => {
+    const id = doc.name.split('/').pop();
+    return { id, ...parseFirestoreDoc(doc) };
+  });
+}
+
 // ── Firebase token verification (REST API) ───────────────────────
 async function verifyFirebaseToken(idToken: string): Promise<{ uid: string; email: string } | null> {
   try {
@@ -185,6 +253,99 @@ async function startServer() {
     }
   });
 
+  // ── Sync user to local store on every sign-in ──────────────────
+  app.post('/api/user/sync', express.json(), async (req: any, res: any) => {
+    try {
+      const idToken = (req.headers.authorization || '').replace('Bearer ', '');
+      if (!idToken) return res.status(401).json({ error: 'unauthorized' });
+      const tokenUser = await verifyFirebaseToken(idToken);
+      if (!tokenUser) return res.status(401).json({ error: 'invalid token' });
+
+      const { uid, email, displayName, photoURL, role } = req.body || {};
+      const resolvedUid = uid || tokenUser.uid;
+      const existing = userStore.get(resolvedUid);
+
+      userStore.set(resolvedUid, {
+        uid: resolvedUid,
+        email: email || tokenUser.email || existing?.email || '',
+        displayName: displayName || existing?.displayName || '',
+        photoURL: photoURL !== undefined ? photoURL : (existing?.photoURL ?? null),
+        role: role || existing?.role || 'user',
+        createdAt: existing?.createdAt || new Date().toISOString(),
+      });
+      saveUsersStore();
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Admin: get all users ────────────────────────────────────────
+  app.get('/api/admin/users', async (req: any, res: any) => {
+    try {
+      const idToken = (req.headers.authorization || '').replace('Bearer ', '');
+      if (!idToken) return res.status(401).json({ error: 'unauthorized' });
+      const tokenUser = await verifyFirebaseToken(idToken);
+      if (!tokenUser || tokenUser.email !== ADMIN_EMAIL) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+
+      // Try Firestore REST first (merges with local store)
+      try {
+        const fsDocs = await fetchFirestoreCollection('users', idToken);
+        if (fsDocs.length > 0) {
+          fsDocs.forEach((d: any) => {
+            const uid = d.id || d.uid;
+            if (uid && !userStore.has(uid)) {
+              userStore.set(uid, {
+                uid,
+                email: d.email || '',
+                displayName: d.displayName || '',
+                photoURL: d.photoURL || null,
+                role: d.role || 'user',
+                createdAt: d.createdAt || new Date().toISOString(),
+              });
+            }
+          });
+          saveUsersStore();
+          console.log(`[admin/users] Firestore returned ${fsDocs.length} users`);
+          return res.json({ users: Array.from(userStore.values()) });
+        }
+      } catch (fsErr: any) {
+        console.warn('[admin/users] Firestore REST failed, using local store:', fsErr.message);
+      }
+
+      res.json({ users: Array.from(userStore.values()) });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Admin: get all quizzes ──────────────────────────────────────
+  app.get('/api/admin/quizzes', async (req: any, res: any) => {
+    try {
+      const idToken = (req.headers.authorization || '').replace('Bearer ', '');
+      if (!idToken) return res.status(401).json({ error: 'unauthorized' });
+      const tokenUser = await verifyFirebaseToken(idToken);
+      if (!tokenUser || tokenUser.email !== ADMIN_EMAIL) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+
+      const fsDocs = await fetchFirestoreCollection('quizzes', idToken, 300);
+      const quizzes = fsDocs.map((d: any) => ({
+        id: d.id,
+        title: d.title || '',
+        category: d.category || '',
+        authorUid: d.authorUid || '',
+        createdAt: d.createdAt || null,
+      }));
+      res.json({ quizzes });
+    } catch (e: any) {
+      console.error('[admin/quizzes]', e.message);
+      res.status(500).json({ error: e.message, quizzes: [] });
+    }
+  });
+
   // ── Admin: get all visitors ─────────────────────────────────────
   app.get('/api/admin/visitors', async (req: any, res: any) => {
     try {
@@ -214,6 +375,20 @@ async function startServer() {
       if (profileData.uid !== tokenUser.uid) return res.status(403).json({ error: 'uid mismatch' });
 
       const now = new Date().toISOString();
+
+      // Always save to local store first (guaranteed to work)
+      userStore.set(profileData.uid, {
+        uid: profileData.uid,
+        email: profileData.email || '',
+        displayName: profileData.displayName || '',
+        photoURL: profileData.photoURL || null,
+        role: profileData.role || 'user',
+        createdAt: now,
+      });
+      saveUsersStore();
+      console.log('[ensure-profile] Profile saved locally for uid:', profileData.uid);
+
+      // Also try Firestore REST (best-effort, don't block response)
       const fields: Record<string, any> = {
         uid:         { stringValue: profileData.uid },
         email:       { stringValue: profileData.email || '' },
@@ -224,19 +399,19 @@ async function startServer() {
       };
 
       const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/${FIREBASE_DB_ID}/documents/users/${profileData.uid}`;
-      const fsRes = await fetch(url, {
+      fetch(url, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
         body: JSON.stringify({ fields }),
-      });
-      const fsData: any = await fsRes.json();
+      }).then(async (fsRes) => {
+        if (!fsRes.ok) {
+          const fsData: any = await fsRes.json().catch(() => ({}));
+          console.warn('[ensure-profile] Firestore REST failed (local save succeeded):', fsData?.error?.message);
+        } else {
+          console.log('[ensure-profile] Profile also saved to Firestore for uid:', profileData.uid);
+        }
+      }).catch((e) => console.warn('[ensure-profile] Firestore REST error:', e.message));
 
-      if (!fsRes.ok) {
-        console.error('[ensure-profile] Firestore REST failed:', fsData?.error?.message);
-        return res.status(fsRes.status).json({ error: fsData?.error?.message || 'Firestore write failed' });
-      }
-
-      console.log('[ensure-profile] Profile saved for uid:', profileData.uid);
       res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
