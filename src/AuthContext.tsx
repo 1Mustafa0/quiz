@@ -8,6 +8,7 @@ const OWNER_EMAIL = 'mstfyalswdany913@gmail.com';
 interface AuthContextType {
   user: User | null;
   role: string | null;
+  plan: 'free' | 'pro';
   loading: boolean;
   isQuizActive: boolean;
   setIsQuizActive: (active: boolean) => void;
@@ -15,6 +16,7 @@ interface AuthContextType {
   setShowWelcome: (show: boolean) => void;
   login: () => Promise<User>;
   logout: () => Promise<void>;
+  refreshPlan: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -22,28 +24,55 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [role, setRole] = useState<string | null>(null);
+  const [plan, setPlan] = useState<'free' | 'pro'>('free');
   const [loading, setLoading] = useState(true);
   const [isQuizActive, setIsQuizActive] = useState(false);
   const [showWelcome, setShowWelcome] = useState(false);
 
-  // Sync user to server-side store (always called on sign-in)
-  const syncUserToServer = async (firebaseUser: any, role: string) => {
+  const fetchPlan = async (firebaseUser: any): Promise<'free' | 'pro'> => {
     try {
       const idToken = await firebaseUser.getIdToken();
-      await fetch('/api/user/sync', {
+      const res = await fetch('/api/user/plan', {
+        headers: { Authorization: `Bearer ${idToken}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.plan === 'pro' ? 'pro' : 'free';
+      }
+    } catch (e: any) {
+      console.warn('[AuthContext] fetchPlan error:', e?.message);
+    }
+    return 'free';
+  };
+
+  const refreshPlan = async () => {
+    if (!user) return;
+    const p = await fetchPlan(user);
+    setPlan(p);
+  };
+
+  const syncUserToServer = async (firebaseUser: any, userRole: string): Promise<'free' | 'pro'> => {
+    try {
+      const idToken = await firebaseUser.getIdToken();
+      const res = await fetch('/api/user/sync', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
         body: JSON.stringify({
           uid: firebaseUser.uid,
           email: firebaseUser.email || '',
           displayName: firebaseUser.displayName || '',
           photoURL: firebaseUser.photoURL || null,
-          role,
+          role: userRole,
         }),
-      }).catch((e) => console.warn('[AuthContext] sync failed:', e?.message));
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.plan === 'pro' ? 'pro' : 'free';
+      }
     } catch (e: any) {
       console.warn('[AuthContext] syncUserToServer error:', e?.message);
     }
+    return 'free';
   };
 
   useEffect(() => {
@@ -65,12 +94,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (firebaseUser.displayName && data.displayName !== firebaseUser.displayName) updates.displayName = firebaseUser.displayName;
             if (data.photoURL !== (firebaseUser.photoURL || null)) updates.photoURL = firebaseUser.photoURL || null;
             if (isOwner && data.role !== 'admin') updates.role = 'admin';
-
             if (Object.keys(updates).length > 0) {
               updateDoc(userRef, updates).catch(() => {});
             }
           } else {
-            // New user — create profile document
             const newProfile = {
               uid: firebaseUser.uid,
               email: firebaseUser.email || '',
@@ -83,41 +110,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const firestoreOk = await setDoc(userRef, newProfile)
               .then(() => true)
               .catch((err) => {
-                console.warn('[AuthContext] Direct Firestore write failed:', err?.code, err?.message, '— trying server fallback');
+                console.warn('[AuthContext] Direct Firestore write failed:', err?.code, err?.message);
                 return false;
               });
 
             if (!firestoreOk) {
               try {
                 const idToken = await firebaseUser.getIdToken();
-                const res = await fetch('/api/user/ensure-profile', {
+                await fetch('/api/user/ensure-profile', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
+                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
                   body: JSON.stringify({ profileData: { ...newProfile, createdAt: undefined } }),
                 });
-                if (!res.ok) {
-                  const err = await res.json().catch(() => ({}));
-                  console.error('[AuthContext] Server profile fallback failed:', err?.error);
-                } else {
-                  console.log('[AuthContext] Profile created via server fallback for uid:', firebaseUser.uid);
-                }
               } catch (fallbackErr: any) {
                 console.error('[AuthContext] Server fallback error:', fallbackErr?.message);
               }
             }
-
             setShowWelcome(true);
           }
         } catch (err) {
           console.error('Auth profile error:', err);
         }
 
-        // Always sync to server-side store so admin can see all users
-        syncUserToServer(firebaseUser, userRole);
-
+        const userPlan = await syncUserToServer(firebaseUser, userRole);
+        setPlan(userPlan);
         setRole(userRole);
       } else {
         setRole(null);
+        setPlan('free');
       }
 
       setUser(firebaseUser);
@@ -137,12 +157,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await logout();
     setUser(null);
     setRole(null);
+    setPlan('free');
   };
 
   return (
     <AuthContext.Provider value={{
       user,
       role,
+      plan,
       loading,
       isQuizActive,
       setIsQuizActive,
@@ -150,6 +172,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setShowWelcome,
       login,
       logout: handleLogout,
+      refreshPlan,
     }}>
       {children}
     </AuthContext.Provider>

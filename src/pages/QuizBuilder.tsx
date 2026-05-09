@@ -2,12 +2,16 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { collection, addDoc, updateDoc, doc, getDoc, Timestamp } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, doc, getDoc, getDocs, query, where, Timestamp } from 'firebase/firestore';
 import { generateQuizFromContent, GeneratedQuestion } from '../services/geminiService';
-import { Upload, FileText, Plus, Trash2, Save, Sparkles, Loader2, AlertCircle, CheckCircle2, ArrowLeft, Pencil, MessageSquarePlus, ChevronDown } from 'lucide-react';
+import { Upload, FileText, Plus, Trash2, Save, Sparkles, Loader2, AlertCircle, CheckCircle2, ArrowLeft, Pencil, MessageSquarePlus, ChevronDown, Crown } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ConfirmModal from '../components/ConfirmModal';
 import CategorySelect from '../components/CategorySelect';
+import UpgradeModal from '../components/UpgradeModal';
+
+const FREE_QUIZ_LIMIT = 3;
+const FREE_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
 
 const QuestionEditor: React.FC<{
   question: GeneratedQuestion;
@@ -86,7 +90,7 @@ const QuestionEditor: React.FC<{
 };
 
 const QuizBuilder: React.FC = () => {
-  const { user } = useAuth();
+  const { user, plan } = useAuth();
   const navigate = useNavigate();
   const { quizId } = useParams<{ quizId?: string }>();
   const isEditing = !!quizId;
@@ -139,6 +143,7 @@ const QuizBuilder: React.FC = () => {
   const [manualText, setManualText] = useState('');
   const [useManualText, setUseManualText] = useState(false);
 
+  const [upgradeModal, setUpgradeModal] = useState<{ open: boolean; reason: 'quiz_limit' | 'file_size' }>({ open: false, reason: 'quiz_limit' });
   const [showCsvImport, setShowCsvImport] = useState(false);
   const [csvText, setCsvText] = useState('');
   const [isDragging, setIsDragging] = useState(false);
@@ -207,6 +212,23 @@ const QuizBuilder: React.FC = () => {
       setError('يجب تسجيل الدخول أولاً لحفظ الكويز.');
       return;
     }
+
+    // Check quiz limit for free users
+    if (plan === 'free') {
+      try {
+        const q = query(collection(db, 'quizzes'), where('authorUid', '==', user.uid));
+        const snap = await getDocs(q);
+        if (snap.size >= FREE_QUIZ_LIMIT) {
+          setUpgradeModal({ open: true, reason: 'quiz_limit' });
+          setIsGenerating(false);
+          setIsSaving(false);
+          return;
+        }
+      } catch (e) {
+        console.warn('[quiz limit check] failed, continuing:', e);
+      }
+    }
+
     setIsSaving(true);
     try {
       const quizData = {
@@ -288,6 +310,12 @@ const QuizBuilder: React.FC = () => {
   };
 
   const processFile = async (file: File) => {
+    // File size check for free users
+    if (plan === 'free' && file.size > FREE_FILE_SIZE_BYTES) {
+      setUpgradeModal({ open: true, reason: 'file_size' });
+      return;
+    }
+
     setIsGenerating(true);
     setError(null);
 
@@ -1133,6 +1161,12 @@ const QuizBuilder: React.FC = () => {
         title={confirmConfig.title}
         message={confirmConfig.message}
         type={confirmConfig.type}
+      />
+
+      <UpgradeModal
+        isOpen={upgradeModal.open}
+        reason={upgradeModal.reason}
+        onClose={() => setUpgradeModal(prev => ({ ...prev, open: false }))}
       />
     </div>
   );

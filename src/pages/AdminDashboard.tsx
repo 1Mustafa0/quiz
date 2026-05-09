@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { deleteDoc, doc, updateDoc, Timestamp } from 'firebase/firestore';
-import { Users, BookOpen, Trash2, Shield, ShieldAlert, Search, Mail, TrendingUp, UserPlus, Eye, UserCheck, RefreshCw, Globe } from 'lucide-react';
+import { Users, BookOpen, Trash2, Shield, ShieldAlert, Search, Mail, TrendingUp, UserPlus, Eye, UserCheck, RefreshCw, Globe, Crown } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../AuthContext';
 import { Navigate, Link } from 'react-router-dom';
@@ -12,6 +12,7 @@ interface UserProfile {
   email: string;
   displayName: string;
   role: string;
+  plan?: 'free' | 'pro';
   createdAt?: any;
 }
 
@@ -112,6 +113,7 @@ const AdminDashboard: React.FC = () => {
         email: u.email || '',
         displayName: u.displayName || '',
         role: u.role || 'user',
+        plan: u.plan || 'free',
         createdAt: u.createdAt || null,
       }));
       setUsers(list);
@@ -222,6 +224,31 @@ const AdminDashboard: React.FC = () => {
       onConfirm: async () => {
         try { await updateDoc(doc(db, 'users', userId), { role: newRole }); }
         catch (error) { handleFirestoreError(error, OperationType.UPDATE, `users/${userId}`); }
+      }
+    });
+  };
+
+  const toggleUserPlan = async (userId: string, currentPlan: 'free' | 'pro' = 'free') => {
+    const newPlan = currentPlan === 'pro' ? 'free' : 'pro';
+    setConfirmConfig({
+      isOpen: true, title: `ترقية إلى ${newPlan === 'pro' ? 'Pro' : 'مجاني'}؟`,
+      message: `هل تريد تغيير خطة هذا المستخدم إلى ${newPlan === 'pro' ? 'Pro (مدفوع)' : 'المجانية'}؟`,
+      type: newPlan === 'pro' ? 'info' : 'warning',
+      onConfirm: async () => {
+        const idToken = await getIdToken();
+        if (!idToken) return;
+        try {
+          const res = await fetch('/api/user/set-plan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+            body: JSON.stringify({ uid: userId, plan: newPlan }),
+          });
+          if (res.ok) {
+            setUsers(prev => prev.map(u => u.uid === userId ? { ...u, plan: newPlan } : u));
+          }
+        } catch (e: any) {
+          console.error('[admin] toggleUserPlan error:', e.message);
+        }
       }
     });
   };
@@ -371,13 +398,14 @@ const AdminDashboard: React.FC = () => {
                       <th className="px-6 py-4 text-sm font-semibold text-gray-900 dark:text-white">User</th>
                       <th className="px-6 py-4 text-sm font-semibold text-gray-900 dark:text-white">Email</th>
                       <th className="px-6 py-4 text-sm font-semibold text-gray-900 dark:text-white">Role</th>
+                      <th className="px-6 py-4 text-sm font-semibold text-gray-900 dark:text-white">Plan</th>
                       <th className="px-6 py-4 text-sm font-semibold text-gray-900 dark:text-white">Joined</th>
                       <th className="px-6 py-4 text-sm font-semibold text-gray-900 dark:text-white text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100 dark:divide-slate-700">
                     {filteredUsers.length === 0 && (
-                      <tr><td colSpan={5} className="px-6 py-12 text-center text-gray-400 dark:text-slate-500">لا يوجد مستخدمون</td></tr>
+                      <tr><td colSpan={6} className="px-6 py-12 text-center text-gray-400 dark:text-slate-500">لا يوجد مستخدمون</td></tr>
                     )}
                     {filteredUsers.map((u) => (
                       <tr key={u.uid} className="hover:bg-gray-50 dark:hover:bg-slate-700/30 transition-colors">
@@ -404,6 +432,16 @@ const AdminDashboard: React.FC = () => {
                           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${u.role === 'admin' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-800 dark:text-purple-300' : 'bg-gray-100 dark:bg-slate-700 text-gray-800 dark:text-slate-300'}`}>
                             {u.role}
                           </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <button
+                            onClick={() => toggleUserPlan(u.uid, u.plan)}
+                            title={`الخطة الحالية: ${u.plan === 'pro' ? 'Pro' : 'مجاني'} — انقر للتبديل`}
+                            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold transition-colors ${u.plan === 'pro' ? 'bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300 hover:bg-violet-200' : 'bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-400 hover:bg-gray-200'}`}
+                          >
+                            {u.plan === 'pro' && <Crown className="w-3 h-3" />}
+                            {u.plan === 'pro' ? 'Pro' : 'مجاني'}
+                          </button>
                         </td>
                         <td className="px-6 py-4 text-sm text-gray-500 dark:text-slate-400">
                           {u.createdAt ? (() => {
@@ -441,9 +479,18 @@ const AdminDashboard: React.FC = () => {
                     </div>
                     <div className="flex items-center justify-between">
                       <span className="text-sm text-gray-600 dark:text-slate-300">{u.email}</span>
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-medium ${u.role === 'admin' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-800 dark:text-purple-300' : 'bg-gray-100 dark:bg-slate-700 text-gray-800 dark:text-slate-300'}`}>
-                        {u.role}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-medium ${u.role === 'admin' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-800 dark:text-purple-300' : 'bg-gray-100 dark:bg-slate-700 text-gray-800 dark:text-slate-300'}`}>
+                          {u.role}
+                        </span>
+                        <button
+                          onClick={() => toggleUserPlan(u.uid, u.plan)}
+                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold ${u.plan === 'pro' ? 'bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300' : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400'}`}
+                        >
+                          {u.plan === 'pro' && <Crown className="w-2.5 h-2.5" />}
+                          {u.plan === 'pro' ? 'Pro' : 'مجاني'}
+                        </button>
+                      </div>
                     </div>
                     <div className="flex items-center justify-end space-x-4 pt-1">
                       <Link to={`/profile/${u.uid}`} className="flex items-center space-x-1 text-sm text-indigo-600 dark:text-indigo-400 font-medium">

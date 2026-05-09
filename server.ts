@@ -129,6 +129,7 @@ interface UserRecord {
   displayName: string;
   photoURL?: string | null;
   role: string;
+  plan: 'free' | 'pro';
   createdAt: string;
 }
 
@@ -271,10 +272,11 @@ async function startServer() {
         displayName: displayName || existing?.displayName || '',
         photoURL: photoURL !== undefined ? photoURL : (existing?.photoURL ?? null),
         role: role || existing?.role || 'user',
+        plan: existing?.plan || 'free',
         createdAt: existing?.createdAt || new Date().toISOString(),
       });
       saveUsersStore();
-      res.json({ ok: true });
+      res.json({ ok: true, plan: userStore.get(resolvedUid)?.plan || 'free' });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -316,6 +318,40 @@ async function startServer() {
       }
 
       res.json({ users: Array.from(userStore.values()) });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Get user plan ───────────────────────────────────────────────
+  app.get('/api/user/plan', async (req: any, res: any) => {
+    try {
+      const idToken = (req.headers.authorization || '').replace('Bearer ', '');
+      if (!idToken) return res.status(401).json({ error: 'unauthorized' });
+      const tokenUser = await verifyFirebaseToken(idToken);
+      if (!tokenUser) return res.status(401).json({ error: 'invalid token' });
+      const record = userStore.get(tokenUser.uid);
+      res.json({ plan: record?.plan || 'free' });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Admin: set user plan ────────────────────────────────────────
+  app.post('/api/user/set-plan', express.json(), async (req: any, res: any) => {
+    try {
+      const idToken = (req.headers.authorization || '').replace('Bearer ', '');
+      if (!idToken) return res.status(401).json({ error: 'unauthorized' });
+      const tokenUser = await verifyFirebaseToken(idToken);
+      if (!tokenUser || tokenUser.email !== ADMIN_EMAIL) return res.status(403).json({ error: 'forbidden' });
+      const { uid, plan } = req.body || {};
+      if (!uid || !['free', 'pro'].includes(plan)) return res.status(400).json({ error: 'uid and plan (free|pro) required' });
+      const existing = userStore.get(uid);
+      if (!existing) return res.status(404).json({ error: 'user not found' });
+      userStore.set(uid, { ...existing, plan });
+      saveUsersStore();
+      console.log(`[set-plan] ${uid} → ${plan}`);
+      res.json({ ok: true, uid, plan });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

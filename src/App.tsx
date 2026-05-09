@@ -16,6 +16,7 @@ import QuizHistory from './pages/QuizHistory';
 import Profile from './pages/Profile';
 import TodoList from './pages/TodoList';
 import WelcomeModal from './components/WelcomeModal';
+import Pricing from './pages/Pricing';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, loading } = useAuth();
@@ -156,6 +157,7 @@ export default function App() {
                 </ProtectedRoute>
               }
             />
+            <Route path="/pricing" element={<Pricing />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Layout>

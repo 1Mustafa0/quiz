@@ -13,6 +13,7 @@ interface UserProfile {
   email: string;
   displayName: string;
   role: string;
+  plan?: 'free' | 'pro';
   createdAt: any;
   photoURL?: string;
 }
@@ -26,7 +27,7 @@ interface Stats {
 
 const Profile: React.FC = () => {
   const { uid } = useParams<{ uid: string }>();
-  const { user: currentUser, role: currentRole } = useAuth();
+  const { user: currentUser, role: currentRole, plan: currentPlan } = useAuth();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [stats, setStats] = useState<Stats>({
     quizzesCreated: 0,
@@ -179,6 +180,11 @@ const Profile: React.FC = () => {
                 ) : profile.role === 'admin' && (
                   <span className="inline-flex items-center gap-1 px-3 py-1 bg-purple-100 text-purple-700 text-sm font-semibold rounded-full border border-purple-200">
                     <Shield className="w-3.5 h-3.5" /> مشرف
+                  </span>
+                )}
+                {(isOwnProfile ? currentPlan === 'pro' : profile.plan === 'pro') && (
+                  <span className="inline-flex items-center gap-1 px-3 py-1 bg-gradient-to-r from-violet-500 to-purple-600 text-white text-sm font-semibold rounded-full shadow-md shadow-violet-500/30">
+                    <Crown className="w-3.5 h-3.5" /> Pro
                   </span>
                 )}
               </div>

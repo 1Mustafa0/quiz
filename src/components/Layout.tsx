@@ -2,11 +2,11 @@ import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
-import { LogIn, LogOut, LayoutDashboard, PlusCircle, Library, Home as HomeIcon, AlertCircle, Shield, History, User, Brain, Menu, X, CheckSquare, Sun, Moon } from 'lucide-react';
+import { LogIn, LogOut, PlusCircle, Library, Home as HomeIcon, AlertCircle, Shield, History, User, Brain, Menu, X, CheckSquare, Sun, Moon, Crown } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user, role, login, logout, isQuizActive } = useAuth();
+  const { user, role, plan, login, logout, isQuizActive } = useAuth();
   const { isDark, toggleTheme } = useTheme();
   const location = useLocation();
   const navigate = useNavigate();
@@ -15,6 +15,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
   const navItems = [
     { name: 'Home', path: '/', icon: HomeIcon },
+    { name: 'Pricing', path: '/pricing', icon: Crown },
     { name: 'Quiz Builder', path: '/builder', icon: PlusCircle, protected: true },
     { name: 'My Quizzes', path: '/library', icon: Library, protected: true },
     { name: 'Mind Maps', path: '/mindmaps', icon: Brain, protected: true },
@@ -105,6 +106,11 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                     {role === 'admin' && (
                       <span className="hidden sm:inline-block bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider">
                         Admin
+                      </span>
+                    )}
+                    {plan === 'pro' && role !== 'admin' && (
+                      <span className="hidden sm:inline-flex items-center gap-0.5 bg-violet-100 dark:bg-violet-900/50 text-violet-700 dark:text-violet-300 text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider">
+                        <Crown className="w-2.5 h-2.5" /> Pro
                       </span>
                     )}
                   </button>
