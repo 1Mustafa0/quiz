@@ -1,13 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot, deleteDoc, doc, orderBy } from 'firebase/firestore';
-import { GitBranch, Plus, Trash2, Search, Filter, Eye } from 'lucide-react';
+import { GitBranch, Plus, Trash2, Search, Filter, Eye, Pencil } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ConfirmModal from '../components/ConfirmModal';
 import MindMapCanvas from '../components/MindMapCanvas';
-import { MindMapData, MindMapBranch } from '../services/mindmapService';
+import type { MindMapData, MindMapBranch } from '../services/mindmapService';
+import { getCategoryTone, normalizeCategory, sortCategories } from '../utils/categories';
 
 const COLORS = ['#6366f1','#f59e0b','#10b981','#ef4444','#8b5cf6','#06b6d4','#f97316','#ec4899'];
 
@@ -84,11 +85,21 @@ const MindMapLibrary: React.FC = () => {
     setToDelete(null);
   };
 
-  const categories = ['All', ...Array.from(new Set(maps.map(m => m.category).filter(Boolean)))];
+  const categoryCounts = useMemo(() => {
+    return maps.reduce<Record<string, number>>((acc, map) => {
+      const category = normalizeCategory(map.category);
+      if (!category) return acc;
+      acc[category] = (acc[category] || 0) + 1;
+      return acc;
+    }, {});
+  }, [maps]);
+
+  const categories = ['All', ...sortCategories(Object.keys(categoryCounts))];
 
   const filtered = maps.filter(m => {
-    const matchSearch = m.title?.toLowerCase().includes(search.toLowerCase());
-    const matchCat = filterCat === 'All' || m.category === filterCat;
+    const category = normalizeCategory(m.category);
+    const matchSearch = `${m.title || ''} ${category}`.toLowerCase().includes(search.toLowerCase());
+    const matchCat = filterCat === 'All' || category === filterCat;
     return matchSearch && matchCat;
   });
 
@@ -136,7 +147,11 @@ const MindMapLibrary: React.FC = () => {
             onChange={e => setFilterCat(e.target.value)}
             className="flex-grow px-3 py-2 border border-gray-200 dark:border-slate-600 rounded-lg text-sm outline-none bg-white dark:bg-slate-700 text-gray-900 dark:text-white"
           >
-            {categories.map(c => <option key={c}>{c}</option>)}
+            {categories.map(c => (
+              <option key={c} value={c}>
+                {c === 'All' ? `All categories (${maps.length})` : `${c} (${categoryCounts[c] || 0})`}
+              </option>
+            ))}
           </select>
         </div>
       </div>
@@ -155,15 +170,18 @@ const MindMapLibrary: React.FC = () => {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           <AnimatePresence>
-            {filtered.map(map => (
-              <motion.div
-                key={map.id}
-                layout
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-100 dark:border-slate-700 shadow-sm hover:shadow-md transition-all overflow-hidden flex flex-col"
-              >
+            {filtered.map(map => {
+              const mapCategory = normalizeCategory(map.category);
+
+              return (
+                <motion.div
+                  key={map.id}
+                  layout
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-100 dark:border-slate-700 shadow-sm hover:shadow-md transition-all overflow-hidden flex flex-col"
+                >
                 {/* Mini Preview */}
                 <div className="h-40 bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-950/40 dark:to-purple-950/40 flex items-center justify-center border-b border-gray-100 dark:border-slate-700 relative overflow-hidden">
                   <MiniMapPreview branches={map.data.branches} />
@@ -172,9 +190,11 @@ const MindMapLibrary: React.FC = () => {
                 <div className="p-5 flex-grow space-y-3">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <span className="inline-block px-2 py-0.5 text-[10px] font-semibold bg-indigo-50 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full uppercase tracking-wider mb-1">
-                        {map.category || 'General'}
-                      </span>
+                      {mapCategory && (
+                        <span className={`mb-1 inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${getCategoryTone(mapCategory)}`} dir="auto">
+                          {mapCategory}
+                        </span>
+                      )}
                       <h3 className="font-bold text-gray-900 dark:text-white text-base line-clamp-2">{map.title}</h3>
                     </div>
                     <button
@@ -189,7 +209,7 @@ const MindMapLibrary: React.FC = () => {
                   </p>
                 </div>
 
-                <div className="p-4 bg-gray-50 dark:bg-slate-700/50 border-t border-gray-100 dark:border-slate-700">
+                <div className="p-4 bg-gray-50 dark:bg-slate-700/50 border-t border-gray-100 dark:border-slate-700 space-y-2">
                   <button
                     onClick={() => setPreview(map)}
                     className="w-full inline-flex items-center justify-center px-4 py-2 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 shadow-sm transition-all"
@@ -197,9 +217,17 @@ const MindMapLibrary: React.FC = () => {
                     <Eye className="w-4 h-4 mr-2" />
                     عرض الخريطة
                   </button>
+                  <button
+                    onClick={() => navigate(`/mindmaps/editor/${map.id}`, { state: { mapData: map.data, category: map.category, docId: map.id } })}
+                    className="w-full inline-flex items-center justify-center px-4 py-2 bg-white text-gray-700 rounded-xl border border-gray-200 hover:bg-gray-50 dark:bg-slate-800 dark:text-slate-200 dark:border-slate-700 dark:hover:bg-slate-700 shadow-sm transition-all"
+                  >
+                    <Pencil className="w-4 h-4 mr-2" />
+                    تحرير الخريطة
+                  </button>
                 </div>
               </motion.div>
-            ))}
+              );
+            })}
           </AnimatePresence>
         </div>
       )}
@@ -217,7 +245,11 @@ const MindMapLibrary: React.FC = () => {
               <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-slate-700">
                 <div>
                   <h3 className="text-xl font-bold text-gray-900 dark:text-white">{preview.title}</h3>
-                  <span className="text-xs text-indigo-600 dark:text-indigo-400 font-medium">{preview.category}</span>
+                  {normalizeCategory(preview.category) && (
+                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${getCategoryTone(preview.category)}`} dir="auto">
+                      {normalizeCategory(preview.category)}
+                    </span>
+                  )}
                 </div>
                 <button onClick={() => setPreview(null)} className="text-gray-400 hover:text-gray-600 dark:hover:text-slate-300 text-2xl font-bold">✕</button>
               </div>

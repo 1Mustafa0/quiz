@@ -5,30 +5,31 @@ import {defineConfig, loadEnv} from 'vite';
 
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
-
-  const define: Record<string, string> = {
-    'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY || process.env.GEMINI_API_KEY || ''),
-    'import.meta.env.VITE_GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY || process.env.GEMINI_API_KEY || ''),
-    'process.env.GOOGLE_API_KEY': JSON.stringify(env.GOOGLE_API_KEY || process.env.GOOGLE_API_KEY || ''),
-    'import.meta.env.VITE_GOOGLE_API_KEY': JSON.stringify(env.GOOGLE_API_KEY || process.env.GOOGLE_API_KEY || ''),
-    'process.env.GEMINI_API_KEYS': JSON.stringify(env.GEMINI_API_KEYS || process.env.GEMINI_API_KEYS || ''),
-    'import.meta.env.VITE_GEMINI_API_KEYS': JSON.stringify(env.GEMINI_API_KEYS || process.env.GEMINI_API_KEYS || ''),
+  const readEnv = (name: string) => env[name] || process.env[name] || '';
+  const collectEnvValues = (pattern: RegExp) => {
+    const names = new Set([...Object.keys(env), ...Object.keys(process.env)]);
+    return [...names]
+      .filter(name => pattern.test(name))
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .map(readEnv)
+      .filter(Boolean);
   };
 
-  // Support GEMINI_API_KEY_1 ... GEMINI_API_KEY_10
-  for (let i = 1; i <= 10; i++) {
-    const k = `GEMINI_API_KEY_${i}`;
-    const val = env[k] || process.env[k] || '';
-    define[`process.env.${k}`] = JSON.stringify(val);
-    define[`import.meta.env.VITE_${k}`] = JSON.stringify(val);
-  }
+  const allGeminiKeys = [
+    readEnv('GEMINI_API_KEY'),
+    readEnv('GOOGLE_API_KEY'),
+    readEnv('GEMINI_API_KEYS'),
+    ...collectEnvValues(/^GEMINI_API_KEY_\d+$/),
+  ]
+    .flatMap(value => value.split(','))
+    .map(value => value.trim())
+    .filter(Boolean);
 
-  // Support numeric-named secrets "1" ... "10" (Replit auto-capture format)
-  for (let i = 1; i <= 10; i++) {
-    const val = env[String(i)] || process.env[String(i)] || '';
-    define[`process.env["${i}"]`] = JSON.stringify(val);
-    define[`import.meta.env.VITE_SECRET_${i}`] = JSON.stringify(val);
-  }
+  const numericSecretKeys = collectEnvValues(/^\d+$/);
+
+  const define: Record<string, string> = {
+    // Only define non-secret environment values here if needed.
+  };
 
   return {
     plugins: [react(), tailwindcss()],
@@ -37,6 +38,41 @@ export default defineConfig(({mode}) => {
       alias: {
         '@': path.resolve(__dirname, '.'),
       },
+    },
+    build: {
+      // Optimize bundle size
+      chunkSizeWarningLimit: 1000,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return undefined;
+            if (/[\\/]node_modules[\\/](react|react-dom|react-router-dom)[\\/]/.test(id)) {
+              return 'vendor-react';
+            }
+            if (/[\\/]node_modules[\\/](firebase|@firebase)[\\/]firestore[\\/]/.test(id) ||
+                /[\\/]node_modules[\\/]@firebase[\\/]webchannel-wrapper[\\/]/.test(id)) {
+              return 'vendor-firestore';
+            }
+            if (/[\\/]node_modules[\\/](firebase|@firebase)[\\/]auth[\\/]/.test(id)) {
+              return 'vendor-firebase-auth';
+            }
+            if (/[\\/]node_modules[\\/](firebase|@firebase)[\\/]/.test(id)) {
+              return 'vendor-firebase-core';
+            }
+            if (/[\\/]node_modules[\\/](lucide-react|lucide)[\\/]/.test(id)) {
+              return 'vendor-icons';
+            }
+            if (/[\\/]node_modules[\\/]@google[\\/]genai[\\/]/.test(id)) {
+              return 'vendor-ai';
+            }
+            return undefined;
+          },
+        },
+      },
+      minify: 'esbuild',
+    },
+    esbuild: {
+      drop: mode === 'production' ? ['console', 'debugger'] : [],
     },
     server: {
       hmr: false,

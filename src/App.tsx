@@ -1,57 +1,185 @@
-import React, { useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import React, { useEffect, Suspense } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from './AuthContext';
-import { trackVisit } from './firebase';
+import { trackVisit } from './utils/visitorTracking';
 import Layout from './components/Layout';
 import Home from './pages/Home';
-import QuizBuilder from './pages/QuizBuilder';
-import QuizLibrary from './pages/QuizLibrary';
-import MindMapBuilder from './pages/MindMapBuilder';
-import MindMapEditor from './pages/MindMapEditor';
-import MindMapLibrary from './pages/MindMapLibrary';
-import QuizPlayer from './pages/QuizPlayer';
-import QuizResult from './pages/QuizResult';
-import AdminDashboard from './pages/AdminDashboard';
-import QuizHistory from './pages/QuizHistory';
-import Profile from './pages/Profile';
-import TodoList from './pages/TodoList';
 import WelcomeModal from './components/WelcomeModal';
-import Pricing from './pages/Pricing';
+import ErrorBoundary from './components/ErrorBoundary';
+import { motion } from 'motion/react';
+
+// Lazy load pages for better performance
+const pageLoaders = {
+  quizBuilder: () => import('./pages/QuizBuilder'),
+  quizLibrary: () => import('./pages/QuizLibrary'),
+  mindMapBuilder: () => import('./pages/MindMapBuilder'),
+  mindMapEditor: () => import('./pages/MindMapEditor'),
+  mindMapLibrary: () => import('./pages/MindMapLibrary'),
+  quizPlayer: () => import('./pages/QuizPlayer'),
+  quizResult: () => import('./pages/QuizResult'),
+  adminDashboard: () => import('./pages/AdminDashboard'),
+  quizHistory: () => import('./pages/QuizHistory'),
+  profile: () => import('./pages/Profile'),
+  todoList: () => import('./pages/TodoList'),
+};
+
+type PageModule = { default: React.ComponentType<any> };
+
+const CHUNK_RELOAD_KEY = 'ai-quiz-master-lazy-reload';
+
+const getChunkReloaded = () => {
+  try {
+    return sessionStorage.getItem(CHUNK_RELOAD_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+
+const setChunkReloaded = () => {
+  try {
+    sessionStorage.setItem(CHUNK_RELOAD_KEY, '1');
+  } catch {
+    // The reload is still useful even if storage is blocked.
+  }
+};
+
+const clearChunkReloaded = () => {
+  try {
+    sessionStorage.removeItem(CHUNK_RELOAD_KEY);
+  } catch {
+    // Ignore storage restrictions.
+  }
+};
+
+const isChunkLoadError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  return /failed to fetch dynamically imported module|importing a module script failed|loading chunk|chunkloaderror/i.test(message);
+};
+
+const lazyWithRetry = (loader: () => Promise<PageModule>) =>
+  React.lazy(() =>
+    loader()
+      .then((module) => {
+        clearChunkReloaded();
+        return module;
+      })
+      .catch((error) => {
+        const alreadyReloaded = getChunkReloaded();
+        if (isChunkLoadError(error) && !alreadyReloaded) {
+          setChunkReloaded();
+          window.location.reload();
+          return new Promise<PageModule>(() => {});
+        }
+
+        clearChunkReloaded();
+        throw error;
+      })
+  );
+
+const preloadPage = (loader: () => Promise<PageModule>) => {
+  loader().catch((error) => {
+    console.warn('[preload] page chunk failed:', error);
+  });
+};
+
+const QuizBuilder = lazyWithRetry(pageLoaders.quizBuilder);
+const QuizLibrary = lazyWithRetry(pageLoaders.quizLibrary);
+const MindMapBuilder = lazyWithRetry(pageLoaders.mindMapBuilder);
+const MindMapEditor = lazyWithRetry(pageLoaders.mindMapEditor);
+const MindMapLibrary = lazyWithRetry(pageLoaders.mindMapLibrary);
+const QuizPlayer = lazyWithRetry(pageLoaders.quizPlayer);
+const QuizResult = lazyWithRetry(pageLoaders.quizResult);
+const AdminDashboard = lazyWithRetry(pageLoaders.adminDashboard);
+const QuizHistory = lazyWithRetry(pageLoaders.quizHistory);
+const Profile = lazyWithRetry(pageLoaders.profile);
+const TodoList = lazyWithRetry(pageLoaders.todoList);
+
+const PageLoader: React.FC = () => (
+  <motion.div
+    initial={{ opacity: 0 }}
+    animate={{ opacity: 1 }}
+    exit={{ opacity: 0 }}
+    transition={{ duration: 0.2 }}
+    className="flex min-h-[55vh] items-center justify-center"
+  >
+    <div className="flex flex-col items-center space-y-4 rounded-2xl border border-gray-100 bg-white px-8 py-7 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+      <div className="relative h-12 w-12">
+        <div className="absolute inset-0 rounded-full border-4 border-indigo-100 dark:border-indigo-900/50" />
+        <div className="absolute inset-0 animate-spin rounded-full border-4 border-transparent border-t-indigo-600" />
+        <div className="absolute inset-3 rounded-full bg-indigo-50 dark:bg-indigo-900/30" />
+      </div>
+      <p className="text-sm font-medium text-gray-600 dark:text-gray-300">جاري التحميل...</p>
+    </div>
+  </motion.div>
+);
+
+const ScrollToTop: React.FC = () => {
+  const { pathname } = useLocation();
+
+  useEffect(() => {
+    window.scrollTo({ top: 0 });
+  }, [pathname]);
+
+  return null;
+};
+
+const RouteBoundary: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { pathname } = useLocation();
+  return <ErrorBoundary resetKey={pathname}>{children}</ErrorBoundary>;
+};
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, loading } = useAuth();
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
-      </div>
-    );
+    return <PageLoader />;
   }
 
   if (!user) {
     return <Navigate to="/" replace />;
   }
 
-  return <>{children}</>;
+  return <Suspense fallback={<PageLoader />}>{children}</Suspense>;
 };
 
 export default function App() {
-  const { user, showWelcome, setShowWelcome } = useAuth();
+  const { user, role, showWelcome, setShowWelcome } = useAuth();
 
   useEffect(() => {
     trackVisit(user?.uid);
   }, [user?.uid]);
 
+  useEffect(() => {
+    if (!user) return;
+
+    const warmCommonPages = () => {
+      preloadPage(pageLoaders.quizLibrary);
+      preloadPage(pageLoaders.quizBuilder);
+      preloadPage(pageLoaders.quizHistory);
+      preloadPage(pageLoaders.profile);
+      if (role === 'admin') preloadPage(pageLoaders.adminDashboard);
+    };
+
+    if ('requestIdleCallback' in window) {
+      const idleId = window.requestIdleCallback(warmCommonPages, { timeout: 4000 });
+      return () => window.cancelIdleCallback(idleId);
+    }
+
+    const timeout = globalThis.setTimeout(warmCommonPages, 2000);
+    return () => globalThis.clearTimeout(timeout);
+  }, [user, role]);
+
   return (
     <Router>
+      <ScrollToTop />
       <Layout>
-        <WelcomeModal 
-          isOpen={showWelcome} 
-          onClose={() => setShowWelcome(false)} 
+        <WelcomeModal
+          isOpen={showWelcome}
+          onClose={() => setShowWelcome(false)}
           userName={user?.displayName || null}
         />
-        <Routes>
+        <RouteBoundary>
+          <Routes>
             <Route path="/" element={<Home />} />
             <Route
               path="/builder"
@@ -83,6 +211,14 @@ export default function App() {
                 <ProtectedRoute>
                   <QuizPlayer />
                 </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/exam/:shareId"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <QuizPlayer publicMode />
+                </Suspense>
               }
             />
             <Route
@@ -150,17 +286,17 @@ export default function App() {
               }
             />
             <Route
-              path="/mindmaps/editor"
+              path="/mindmaps/editor/:docId?"
               element={
                 <ProtectedRoute>
                   <MindMapEditor />
                 </ProtectedRoute>
               }
             />
-            <Route path="/pricing" element={<Pricing />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
-        </Layout>
-      </Router>
+        </RouteBoundary>
+      </Layout>
+    </Router>
   );
 }

@@ -23,8 +23,25 @@ interface Quiz {
   timer: number;
 }
 
-const QuizPlayer: React.FC = () => {
-  const { quizId } = useParams<{ quizId: string }>();
+interface LocalResult {
+  score: number;
+  totalQuestions: number;
+  answers: {
+    question: string;
+    userAnswer: string;
+    correctAnswer: string;
+    isCorrect: boolean;
+    feedback: string;
+    isMarked: boolean;
+  }[];
+}
+
+interface QuizPlayerProps {
+  publicMode?: boolean;
+}
+
+const QuizPlayer: React.FC<QuizPlayerProps> = ({ publicMode = false }) => {
+  const { quizId, shareId } = useParams<{ quizId?: string; shareId?: string }>();
   const { user, setIsQuizActive } = useAuth();
   const navigate = useNavigate();
 
@@ -35,6 +52,7 @@ const QuizPlayer: React.FC = () => {
   const [timeLeft, setTimeLeft] = useState<number>(0);
   const [isTimerPaused, setIsTimerPaused] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
+  const [publicResult, setPublicResult] = useState<LocalResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
 
@@ -85,9 +103,23 @@ const QuizPlayer: React.FC = () => {
 
   useEffect(() => {
     const fetchQuiz = async () => {
-      if (!quizId) return;
+      if (publicMode && !shareId) return;
+      if (!publicMode && !quizId) return;
       try {
-        const docRef = doc(db, 'quizzes', quizId);
+        if (publicMode) {
+          const res = await fetch(`/api/shared-quiz/${shareId}`);
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            throw new Error(data?.error || 'Shared quiz not found');
+          }
+          const sharedQuiz = data.quiz as Quiz;
+          setQuiz(sharedQuiz);
+          setUserAnswers(new Array(sharedQuiz.questions.length).fill(''));
+          setTimeLeft((sharedQuiz.timer || 0) * 60);
+          return;
+        }
+
+        const docRef = doc(db, 'quizzes', quizId!);
         const docSnap = await getDoc(docRef);
         if (docSnap.exists()) {
           const data = docSnap.data() as Quiz;
@@ -98,14 +130,19 @@ const QuizPlayer: React.FC = () => {
           navigate('/library');
         }
       } catch (error) {
-        handleFirestoreError(error, OperationType.GET, `quizzes/${quizId}`);
+        if (publicMode) {
+          console.error('[public quiz]', error);
+          navigate('/');
+        } else {
+          handleFirestoreError(error, OperationType.GET, `quizzes/${quizId}`);
+        }
       } finally {
         setLoading(false);
       }
     };
 
     fetchQuiz();
-  }, [quizId, navigate]);
+  }, [quizId, shareId, navigate, publicMode]);
 
   useEffect(() => {
     if (timeLeft > 0 && !isFinished && !isTimerPaused) {
@@ -143,44 +180,53 @@ const QuizPlayer: React.FC = () => {
     });
   };
 
+  const calculateResult = (): LocalResult | null => {
+    if (!quiz) return null;
+    let score = 0;
+    const answers = quiz.questions.map((q, i) => {
+      const userAnswer = userAnswers[i] || '';
+      let isCorrect = false;
+      if (q.type === 'short-answer') {
+        isCorrect = userAnswer.toLowerCase().trim() === q.correctAnswer.toLowerCase().trim();
+      } else {
+        isCorrect = userAnswer === q.correctAnswer;
+      }
+      if (isCorrect) score++;
+      return {
+        question: q.questionText,
+        userAnswer,
+        correctAnswer: q.correctAnswer,
+        isCorrect,
+        feedback: q.feedback,
+        isMarked: markedQuestions.has(i),
+      };
+    });
+
+    return { score, totalQuestions: quiz.questions.length, answers };
+  };
+
   const handleFinish = async () => {
-    if (!quiz || !user) return;
+    if (!quiz) return;
     setIsFinished(true);
     if (timerRef.current) clearInterval(timerRef.current);
 
-    let score = 0;
-    quiz.questions.forEach((q, i) => {
-      const userAnswer = userAnswers[i] || '';
-      if (q.type === 'short-answer') {
-        if (userAnswer.toLowerCase().trim() === q.correctAnswer.toLowerCase().trim()) {
-          score++;
-        }
-      } else {
-        if (userAnswer === q.correctAnswer) {
-          score++;
-        }
-      }
-    });
+    const result = calculateResult();
+    if (!result) return;
+
+    if (publicMode) {
+      setPublicResult(result);
+      return;
+    }
+
+    if (!user) return;
 
     try {
       const resultData = {
         quizId: quiz.id,
         userId: user.uid,
-        score,
-        totalQuestions: quiz.questions.length,
-        answers: quiz.questions.map((q, i) => {
-          const ans = userAnswers[i] || '';
-          return {
-            question: q.questionText,
-            userAnswer: ans,
-            correctAnswer: q.correctAnswer,
-            isCorrect: q.type === 'short-answer' 
-              ? ans.toLowerCase().trim() === q.correctAnswer.toLowerCase().trim()
-              : ans === q.correctAnswer,
-            feedback: q.feedback,
-            isMarked: markedQuestions.has(i)
-          };
-        }),
+        score: result.score,
+        totalQuestions: result.totalQuestions,
+        answers: result.answers,
         completedAt: Timestamp.now(),
       };
 
@@ -197,6 +243,17 @@ const QuizPlayer: React.FC = () => {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  const restartPublicExam = () => {
+    if (!quiz) return;
+    setPublicResult(null);
+    setIsFinished(false);
+    setCurrentQuestionIndex(0);
+    setUserAnswers(new Array(quiz.questions.length).fill(''));
+    setMarkedQuestions(new Set());
+    setTimeLeft((quiz.timer || 0) * 60);
+    setIsTimerPaused(false);
+  };
+
   if (loading) return <div className="flex items-center justify-center min-h-[60vh]"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div></div>;
   if (!quiz || !quiz.questions || quiz.questions.length === 0) return (
     <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4">
@@ -206,8 +263,75 @@ const QuizPlayer: React.FC = () => {
     </div>
   );
 
+  if (publicResult) {
+    const percent = Math.round((publicResult.score / publicResult.totalQuestions) * 100);
+    return (
+      <div className="max-w-4xl mx-auto space-y-8 pb-20">
+        <div className="bg-white p-8 rounded-3xl border border-gray-100 shadow-lg text-center space-y-4">
+          <div className={`w-20 h-20 rounded-full mx-auto flex items-center justify-center ${percent >= 60 ? 'bg-green-100 text-green-600' : 'bg-amber-100 text-amber-600'}`}>
+            <CheckCircle2 className="w-10 h-10" />
+          </div>
+          <div>
+            <h1 className="text-3xl font-extrabold text-gray-900">{quiz.title}</h1>
+            <p className="text-gray-500 mt-2">نتيجة الامتحان</p>
+          </div>
+          <div className="text-5xl font-black text-indigo-600">{publicResult.score}/{publicResult.totalQuestions}</div>
+          <p className="text-lg font-semibold text-gray-700">{percent}%</p>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center pt-4">
+            <button onClick={restartPublicExam} className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-colors">
+              إعادة الامتحان
+            </button>
+            <button onClick={() => navigate('/')} className="px-6 py-3 bg-gray-100 text-gray-700 rounded-xl font-bold hover:bg-gray-200 transition-colors">
+              العودة للرئيسية
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          {publicResult.answers.map((answer, index) => (
+            <div key={index} className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+              <div className="flex items-start gap-3">
+                {answer.isCorrect ? <CheckCircle2 className="w-5 h-5 text-green-500 mt-1" /> : <XCircle className="w-5 h-5 text-red-500 mt-1" />}
+                <div className="space-y-2 flex-1">
+                  <h3 className="font-bold text-gray-900">س{index + 1}. {answer.question}</h3>
+                  <p className="text-sm text-gray-600">إجابتك: <span className="font-semibold">{answer.userAnswer || 'بدون إجابة'}</span></p>
+                  {!answer.isCorrect && <p className="text-sm text-green-700">الإجابة الصحيحة: <span className="font-semibold">{answer.correctAnswer}</span></p>}
+                  {answer.feedback && <p className="text-sm text-gray-500 bg-gray-50 p-3 rounded-xl">{answer.feedback}</p>}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   const currentQuestion = quiz.questions[currentQuestionIndex];
-  if (!currentQuestion) return null;
+  if (!currentQuestion) {
+    return (
+      <div className="flex min-h-[60vh] flex-col items-center justify-center space-y-4 text-center">
+        <AlertCircle className="h-12 w-12 text-amber-500" />
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">تعذر عرض هذا السؤال</h2>
+          <p className="mt-2 text-gray-600 dark:text-slate-400">يبدو أن بيانات الكويز غير مكتملة أو تغيرت أثناء الامتحان.</p>
+        </div>
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <button
+            onClick={restartPublicExam}
+            className="rounded-xl bg-indigo-600 px-6 py-3 font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700"
+          >
+            إعادة المحاولة
+          </button>
+          <button
+            onClick={() => navigate(publicMode ? '/' : '/library')}
+            className="rounded-xl border border-gray-200 bg-white px-6 py-3 font-semibold text-gray-700 shadow-sm transition-colors hover:bg-gray-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+          >
+            رجوع
+          </button>
+        </div>
+      </div>
+    );
+  }
   
   const progress = ((currentQuestionIndex + 1) / quiz.questions.length) * 100;
 
@@ -394,7 +518,7 @@ const QuizPlayer: React.FC = () => {
       <ConfirmModal
         isOpen={showExitConfirm}
         onClose={() => setShowExitConfirm(false)}
-        onConfirm={() => navigate('/library')}
+        onConfirm={() => navigate(publicMode ? '/' : '/library')}
         title="الخروج من الكويز؟"
         message="هل تريد الخروج قبل إتمام الكويز؟ لن يتم حفظ تقدمك."
         confirmText="الخروج"

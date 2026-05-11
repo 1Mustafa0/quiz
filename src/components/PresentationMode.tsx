@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { MindMapData } from '../services/mindmapService';
+import type { MindMapData } from '../services/mindmapService';
 import { X, ChevronLeft, ChevronRight, Layers } from 'lucide-react';
 
 const PALETTE = [

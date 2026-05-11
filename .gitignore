@@ -1,4 +1,5 @@
 node_modules/
+.local/
 build/
 dist/
 coverage/
@@ -6,3 +7,6 @@ coverage/
 *.log
 .env*
 !.env.example
+.users.json
+.visitors.json
+.shared-quizzes.json

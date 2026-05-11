@@ -2,16 +2,72 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { collection, addDoc, updateDoc, doc, getDoc, getDocs, query, where, Timestamp } from 'firebase/firestore';
-import { generateQuizFromContent, GeneratedQuestion } from '../services/geminiService';
-import { Upload, FileText, Plus, Trash2, Save, Sparkles, Loader2, AlertCircle, CheckCircle2, ArrowLeft, Pencil, MessageSquarePlus, ChevronDown, Crown } from 'lucide-react';
+import { collection, addDoc, updateDoc, doc, getDoc, Timestamp } from 'firebase/firestore';
+import type { GeneratedQuestion } from '../services/geminiService';
+import { Upload, FileText, Plus, Trash2, Save, Sparkles, Loader2, AlertCircle, CheckCircle2, ArrowLeft, Pencil, MessageSquarePlus, ChevronDown, Download } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ConfirmModal from '../components/ConfirmModal';
 import CategorySelect from '../components/CategorySelect';
-import UpgradeModal from '../components/UpgradeModal';
+import ExtractedTextPreview from '../components/ExtractedTextPreview';
+import { ownerOnlyError } from '../utils/owner';
+import { exportQuizToPdf } from '../utils/quizPdf';
+import { normalizeCategory } from '../utils/categories';
+import { formatExtractedTextPreview } from '../utils/extractedText';
 
-const FREE_QUIZ_LIMIT = 3;
-const FREE_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
+const MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024; // Server upload limit
+const ACCEPTED_FILE_TYPES = [
+  '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.csv',
+  '.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tif', '.tiff',
+  '.txt', '.js', '.ts', '.tsx', '.jsx', '.py', '.java', '.cpp', '.c', '.html', '.css', '.md', '.json',
+].join(',');
+
+interface ExtractionMeta {
+  fileName: string;
+  method: string;
+  usedOcr: boolean;
+  length: number;
+  returnedLength: number;
+}
+
+const EXTRACTION_LABELS: Record<string, string> = {
+  'pdf-parser': 'PDF text parser',
+  'gemini-ocr-pdf': 'Gemini OCR for scanned PDF',
+  'gemini-ocr-pdf-images': 'Gemini OCR for rendered PDF pages',
+  'gemini-ocr-image': 'Gemini OCR for image',
+  'gemini-ocr-office-images': 'Gemini OCR for embedded Office images',
+  'local-paddleocr-image': 'PaddleOCR for image',
+  'local-paddleocr-pdf-images': 'PaddleOCR for rendered PDF pages',
+  'local-paddleocr-office-images': 'PaddleOCR for embedded Office images',
+  'local-tesseractjs-image': 'Tesseract.js OCR for image',
+  'local-tesseractjs-pdf-images': 'Tesseract.js OCR for rendered PDF pages',
+  'local-tesseractjs-office-images': 'Tesseract.js OCR for embedded Office images',
+  'mixed-ocr-pdf-images': 'Mixed OCR engines for rendered PDF pages',
+  'mixed-ocr-office-images': 'Mixed OCR engines for embedded Office images',
+  'local-ocr-failed': 'Local OCR could not read enough text',
+  'gemini-vision-direct': 'Gemini image understanding',
+  'mammoth-docx': 'Word document parser',
+  'office-parser': 'Office document parser',
+  'csv-parser': 'CSV parser',
+  'plain-text': 'Plain text',
+  'utf8-fallback': 'Text fallback',
+};
+
+const QUIZ_GENERATION_ERROR =
+  'تعذر إنشاء الكويز حالياً. جرّب ملفاً أوضح أو نصاً أقصر، ثم حاول مرة أخرى.';
+const FILE_EXTRACTION_ERROR =
+  'تعذر استخراج نص كاف من الملف. جرّب ملفاً نصياً أو صورة أوضح، ثم حاول مرة أخرى.';
+const SAVE_QUIZ_ERROR =
+  'تعذر حفظ الكويز حالياً. تأكد من اتصالك بالإنترنت ثم حاول مرة أخرى.';
+const SERVER_UNAVAILABLE_ERROR =
+  'الخادم غير متاح حالياً. انتظر لحظة ثم حاول مرة أخرى.';
+
+const formatFileSize = (bytes: number) => {
+  if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+};
+
+const getExtractionLabel = (method: string) => EXTRACTION_LABELS[method] || method || 'Unknown extraction';
 
 const QuestionEditor: React.FC<{
   question: GeneratedQuestion;
@@ -90,7 +146,7 @@ const QuestionEditor: React.FC<{
 };
 
 const QuizBuilder: React.FC = () => {
-  const { user, plan } = useAuth();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const { quizId } = useParams<{ quizId?: string }>();
   const isEditing = !!quizId;
@@ -107,12 +163,16 @@ const QuizBuilder: React.FC = () => {
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [numQuestions, setNumQuestions] = useState(5);
   const [autoQuestions, setAutoQuestions] = useState(false);
   const [notes, setNotes] = useState('');
   const [showNotes, setShowNotes] = useState(false);
+  const [extractedText, setExtractedText] = useState('');
+  const [extractedMeta, setExtractedMeta] = useState<ExtractionMeta | null>(null);
+  const [showExtractedText, setShowExtractedText] = useState(false);
 
   const [activeTab, setActiveTab] = useState<'manual' | 'ai' | null>(isEditing ? 'manual' : null);
 
@@ -126,7 +186,7 @@ const QuizBuilder: React.FC = () => {
         const data = snap.data();
         setTitle(data.title || '');
         setDescription(data.description || '');
-        setCategory(data.category || '');
+        setCategory(data.category ? normalizeCategory(data.category) : '');
         setDifficulty(data.difficulty || 'medium');
         setTimer(data.timer ?? 10);
         setNoTimer(data.timer === 0);
@@ -143,7 +203,6 @@ const QuizBuilder: React.FC = () => {
   const [manualText, setManualText] = useState('');
   const [useManualText, setUseManualText] = useState(false);
 
-  const [upgradeModal, setUpgradeModal] = useState<{ open: boolean; reason: 'quiz_limit' | 'file_size' }>({ open: false, reason: 'quiz_limit' });
   const [showCsvImport, setShowCsvImport] = useState(false);
   const [csvText, setCsvText] = useState('');
   const [isDragging, setIsDragging] = useState(false);
@@ -213,28 +272,13 @@ const QuizBuilder: React.FC = () => {
       return;
     }
 
-    // Check quiz limit for free users
-    if (plan === 'free') {
-      try {
-        const q = query(collection(db, 'quizzes'), where('authorUid', '==', user.uid));
-        const snap = await getDocs(q);
-        if (snap.size >= FREE_QUIZ_LIMIT) {
-          setUpgradeModal({ open: true, reason: 'quiz_limit' });
-          setIsGenerating(false);
-          setIsSaving(false);
-          return;
-        }
-      } catch (e) {
-        console.warn('[quiz limit check] failed, continuing:', e);
-      }
-    }
-
     setIsSaving(true);
     try {
+      const generatedCategory = normalizeCategory(category);
       const quizData = {
         title: generated.title || 'AI Generated Quiz',
         description: (generated.description || '').substring(0, 900),
-        category: category || 'General',
+        category: generatedCategory,
         difficulty,
         timer,
         questions: generated.questions,
@@ -251,9 +295,9 @@ const QuizBuilder: React.FC = () => {
       console.error('Auto-save failed:', err);
       const isPermission = err?.message?.includes('permission') || err?.code === 'permission-denied';
       if (isPermission) {
-        setError('لا تملك صلاحية الحفظ. يرجى التأكد من نشر قواعد Firestore أو التواصل مع المشرف. يمكنك مشاهدة الأسئلة أدناه والحفظ اليدوي لاحقاً.');
+        setError(ownerOnlyError(user, 'لا تملك صلاحية الحفظ حالياً. يمكنك مشاهدة الأسئلة أدناه والحفظ اليدوي لاحقاً.', err));
       } else {
-        setError(`فشل الحفظ التلقائي: ${err?.message || 'خطأ غير معروف'}. يمكنك الضغط على "Save Quiz" للحفظ اليدوي.`);
+        setError(ownerOnlyError(user, `${SAVE_QUIZ_ERROR} يمكنك الضغط على "Save Quiz" للحفظ اليدوي.`, err));
       }
     } finally {
       setIsSaving(false);
@@ -272,6 +316,9 @@ const QuizBuilder: React.FC = () => {
         setCategory('');
         setQuestions([]);
         setManualText('');
+        setExtractedText('');
+        setExtractedMeta(null);
+        setShowExtractedText(false);
         setError(null);
         setSuccess(null);
       }
@@ -279,12 +326,22 @@ const QuizBuilder: React.FC = () => {
   };
 
   const handleGenerateFromManualText = async () => {
-    if (!manualText.trim()) return;
+    const cleanManualText = manualText.trim();
+    if (!cleanManualText) return;
     setIsGenerating(true);
     setError(null);
+    setExtractedText(cleanManualText);
+    setExtractedMeta({
+      fileName: 'Manual text',
+      method: 'plain-text',
+      usedOcr: false,
+      length: cleanManualText.length,
+      returnedLength: cleanManualText.length,
+    });
+    setShowExtractedText(cleanManualText.length <= 5000);
     try {
-      const generated = await generateQuizFromContent({
-        content: manualText,
+      const generated = await generateQuizOnServer({
+        content: cleanManualText,
         numQuestions: autoQuestions ? 0 : numQuestions,
         language: 'detect',
         difficulty,
@@ -296,7 +353,8 @@ const QuizBuilder: React.FC = () => {
       setQuestions(generated.questions);
       await autoSaveAndPlay(generated);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred during generation');
+      console.error('[QuizBuilder] manual generation failed:', err);
+      setError(ownerOnlyError(user, QUIZ_GENERATION_ERROR, err));
     } finally {
       setIsGenerating(false);
     }
@@ -309,31 +367,160 @@ const QuizBuilder: React.FC = () => {
     if (e.target) e.target.value = ''; // Reset file input
   };
 
+  const parseFileOnServer = async (file: File): Promise<{ text: string; extraction?: any }> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const headers = new Headers();
+    if (user) {
+      headers.set('Authorization', `Bearer ${await user.getIdToken()}`);
+    }
+
+    const response = await fetch('/api/parse-file', {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+
+    if (!response.ok) {
+      let errorMessage = `Server error: ${response.status}`;
+      const responseText = await response.text().catch(() => '');
+      try {
+        const errorData = JSON.parse(responseText);
+        errorMessage = errorData.details || errorData.error || errorMessage;
+      } catch (e) {
+        if (responseText.includes('<!DOCTYPE html>')) {
+          errorMessage = 'Server returned HTML instead of JSON. The API route might be missing or the server crashed.';
+        } else if (responseText) {
+          errorMessage = responseText.substring(0, 200);
+        }
+      }
+      throw new Error(errorMessage);
+    }
+
+    const responseText = await response.text();
+    try {
+      return JSON.parse(responseText);
+    } catch (e) {
+      console.error('Failed to parse JSON response:', responseText);
+      if (responseText.includes('<!DOCTYPE html>')) {
+        throw new Error('Server returned HTML instead of JSON. The backend might not be running correctly.');
+      }
+      throw new Error('Failed to parse server response as JSON.');
+    }
+  };
+
+  const generateQuizOnServer = async (payload: {
+    content?: string;
+    image?: {
+      data: string;
+      mimeType: string;
+    };
+    numQuestions: number;
+    language: string;
+    difficulty: 'easy' | 'medium' | 'hard';
+    notes?: string;
+  }) => {
+    if (!user) {
+      throw new Error('User must be authenticated to generate quizzes.');
+    }
+
+    const token = await user.getIdToken();
+    const response = await fetch('/api/generate-quiz', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data?.error || `Server returned ${response.status}`);
+    }
+    return data;
+  };
+
+  const generateQuizFromExtractedText = async (file: File, text: string, extraction?: any) => {
+    const cleanText = typeof text === 'string' ? text.trim() : '';
+    console.log('Extracted text from server:', cleanText.substring(0, 100));
+
+    if (cleanText === '[object Object]' || cleanText.length < 10) {
+      throw new Error('فشل استخراج نص كاف من الملف. قد يكون الملف فارغًا أو محميًا أو يحتوي على صور غير واضحة.');
+    }
+
+    const formattedText = formatExtractedTextPreview(cleanText) || cleanText;
+
+    setExtractedText(formattedText);
+    setExtractedMeta({
+      fileName: file.name,
+      method: extraction?.method || 'unknown',
+      usedOcr: Boolean(extraction?.usedOcr),
+      length: Number(extraction?.length || cleanText.length),
+      returnedLength: Number(extraction?.returnedLength || formattedText.length),
+    });
+    setShowExtractedText(true);
+
+    const generated = await generateQuizOnServer({
+      content: formattedText,
+      numQuestions: autoQuestions ? 0 : numQuestions,
+      language: 'detect',
+      difficulty,
+      notes: notes.trim() || undefined,
+    });
+
+    setTitle(generated.title);
+    setDescription(generated.description);
+    setQuestions(generated.questions);
+    await autoSaveAndPlay(generated);
+  };
+
   const processFile = async (file: File) => {
-    // File size check for free users
-    if (plan === 'free' && file.size > FREE_FILE_SIZE_BYTES) {
-      setUpgradeModal({ open: true, reason: 'file_size' });
+    if (file.size > MAX_UPLOAD_SIZE_BYTES) {
+      setError(`File is too large. Maximum upload size is ${formatFileSize(MAX_UPLOAD_SIZE_BYTES)}.`);
       return;
     }
 
     setIsGenerating(true);
     setError(null);
+    setSuccess(null);
+    setExtractedText('');
+    setExtractedMeta(null);
+    setShowExtractedText(false);
 
     // Verify API health before proceeding
     try {
       const healthCheck = await fetch('/api/health').then(r => r.json()).catch(() => null);
       if (!healthCheck || healthCheck.status !== 'ok') {
-        throw new Error('Backend server is not responding. Please wait a moment and try again.');
+        throw new Error('Backend server is not responding.');
       }
     } catch (e) {
-      setError('Backend server is not responding. Please wait a moment and try again.');
+      setError(ownerOnlyError(user, SERVER_UNAVAILABLE_ERROR, e));
       setIsGenerating(false);
       return;
     }
 
     try {
-      if (file.type.startsWith('image/')) {
-        // Handle images directly with Gemini (multimodal)
+      try {
+        const parsed = await parseFileOnServer(file);
+        await generateQuizFromExtractedText(file, parsed.text, parsed.extraction);
+      } catch (parseErr) {
+        const isImageFile = file.type.startsWith('image/') || /\.(jpe?g|png|webp|gif|bmp|tiff?)$/i.test(file.name);
+        if (!isImageFile) {
+          throw parseErr;
+        }
+
+        console.warn('[image OCR] Server OCR failed, using direct Gemini image generation:', parseErr instanceof Error ? parseErr.message : parseErr);
+        setExtractedText('');
+        setExtractedMeta({
+          fileName: file.name,
+          method: 'gemini-vision-direct',
+          usedOcr: false,
+          length: 0,
+          returnedLength: 0,
+        });
+        setShowExtractedText(false);
+
         const reader = new FileReader();
         const base64Promise = new Promise<string>((resolve, reject) => {
           reader.onload = () => {
@@ -345,7 +532,7 @@ const QuizBuilder: React.FC = () => {
         });
 
         const base64Data = await base64Promise;
-        const generated = await generateQuizFromContent({
+        const generated = await generateQuizOnServer({
           image: {
             data: base64Data,
             mimeType: file.type,
@@ -360,65 +547,14 @@ const QuizBuilder: React.FC = () => {
         setDescription(generated.description);
         setQuestions(generated.questions);
         await autoSaveAndPlay(generated);
-      } else {
-        // Handle documents via backend parsing
-        const formData = new FormData();
-        formData.append('file', file);
-
-        const response = await fetch('/api/parse-file', {
-          method: 'POST',
-          body: formData,
-        });
-
-        if (!response.ok) {
-          let errorMessage = `Server error: ${response.status}`;
-          const responseText = await response.text().catch(() => '');
-          try {
-            const errorData = JSON.parse(responseText);
-            errorMessage = errorData.details || errorData.error || errorMessage;
-          } catch (e) {
-            if (responseText.includes('<!DOCTYPE html>')) {
-              errorMessage = 'Server returned HTML instead of JSON. The API route might be missing or the server crashed.';
-            } else if (responseText) {
-              errorMessage = responseText.substring(0, 100);
-            }
-          }
-          throw new Error(errorMessage);
-        }
-        
-        const responseText = await response.text();
-        let textData;
-        try {
-          textData = JSON.parse(responseText);
-        } catch (e) {
-          console.error('Failed to parse JSON response:', responseText);
-          if (responseText.includes('<!DOCTYPE html>')) {
-            throw new Error('Server returned HTML instead of JSON. The backend might not be running correctly.');
-          }
-          throw new Error('Failed to parse server response as JSON.');
-        }
-        const { text } = textData;
-        console.log('Extracted text from server:', text?.substring(0, 100));
-
-        if (text === '[object Object]' || !text || text.length < 10) {
-          throw new Error('فشل استخراج النص من الملف. قد يكون الملف فارغاً أو عبارة عن صورة (في حالة الـ PDF). يرجى محاولة رفعه كصورة (JPG/PNG) إذا كان يحتوي على نص مصور.');
-        }
-
-        const generated = await generateQuizFromContent({
-          content: text,
-          numQuestions: autoQuestions ? 0 : numQuestions,
-          language: 'detect',
-          difficulty,
-          notes: notes.trim() || undefined,
-        });
-
-        setTitle(generated.title);
-        setDescription(generated.description);
-        setQuestions(generated.questions);
-        await autoSaveAndPlay(generated);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred during generation');
+      console.error('[QuizBuilder] file generation failed:', err);
+      const detail = err instanceof Error ? err.message : String(err);
+      const publicMessage = /extract|parse|file|ocr|pdf|office|server|backend/i.test(detail)
+        ? FILE_EXTRACTION_ERROR
+        : QUIZ_GENERATION_ERROR;
+      setError(ownerOnlyError(user, publicMessage, err));
     } finally {
       setIsGenerating(false);
     }
@@ -485,12 +621,13 @@ const QuizBuilder: React.FC = () => {
     setError(null);
 
     try {
+      const quizCategory = normalizeCategory(category);
       if (isEditing && quizId) {
         // Update existing quiz
         await updateDoc(doc(db, 'quizzes', quizId), {
           title,
           description,
-          category,
+          category: quizCategory,
           difficulty,
           timer,
           questions,
@@ -503,7 +640,7 @@ const QuizBuilder: React.FC = () => {
         const quizData = {
           title,
           description,
-          category,
+          category: quizCategory,
           difficulty,
           timer,
           questions,
@@ -517,9 +654,34 @@ const QuizBuilder: React.FC = () => {
       }
     } catch (err: any) {
       console.error('Failed to save quiz:', err);
-      setError(`Failed to save quiz: ${err.message || 'Unknown error'}`);
+      setError(ownerOnlyError(user, SAVE_QUIZ_ERROR, err));
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleExportPdf = async () => {
+    if (questions.length === 0) {
+      setError('Please add at least one question before exporting PDF');
+      return;
+    }
+
+    setIsExportingPdf(true);
+    try {
+      const downloaded = await exportQuizToPdf({
+        title: title || 'Untitled Quiz',
+        description,
+        category: normalizeCategory(category),
+        difficulty,
+        timer: noTimer ? 0 : timer,
+        questions,
+      });
+
+      if (!downloaded) {
+        setError('تعذر تحميل ملف PDF حالياً. حاول مرة أخرى.');
+      }
+    } finally {
+      setIsExportingPdf(false);
     }
   };
 
@@ -594,7 +756,7 @@ const QuizBuilder: React.FC = () => {
             </p>
           </div>
         </div>
-        <div className="flex space-x-3">
+        <div className="flex flex-wrap gap-3">
           <button
             onClick={handleClearAll}
             disabled={isSaving || isGenerating}
@@ -602,6 +764,14 @@ const QuizBuilder: React.FC = () => {
           >
             <Trash2 className="w-4 h-4 mr-2" />
             Clear All
+          </button>
+          <button
+            onClick={handleExportPdf}
+            disabled={isSaving || isGenerating || isExportingPdf || questions.length === 0}
+            className="inline-flex items-center px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isExportingPdf ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+            {isExportingPdf ? 'Downloading...' : 'Download PDF'}
           </button>
           <button
             onClick={handleSaveQuiz}
@@ -620,10 +790,10 @@ const QuizBuilder: React.FC = () => {
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
-            className="bg-red-50 border border-red-100 p-4 rounded-xl flex items-center text-red-600 mb-6"
+            className="bg-red-50 border border-red-100 p-4 rounded-xl flex items-start text-red-600 mb-6"
           >
-            <AlertCircle className="w-5 h-5 mr-3 flex-shrink-0" />
-            <p className="text-sm font-medium">{error}</p>
+            <AlertCircle className="w-5 h-5 mr-3 mt-0.5 flex-shrink-0" />
+            <p className="text-sm font-medium whitespace-pre-line" dir="auto">{error}</p>
             <button onClick={() => setError(null)} className="ml-auto text-red-400 hover:text-red-600">
               <Plus className="w-5 h-5 rotate-45" />
             </button>
@@ -694,7 +864,12 @@ const QuizBuilder: React.FC = () => {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
-                    <CategorySelect value={category} onChange={setCategory} sourceType="quiz" placeholder="e.g., Science" />
+                    <CategorySelect
+                      value={category}
+                      onChange={setCategory}
+                      sourceType="quiz"
+                      placeholder="التصنيف اختياري"
+                    />
                   </div>
                   <div>
                     <div className="flex items-center justify-between mb-1">
@@ -879,7 +1054,12 @@ const QuizBuilder: React.FC = () => {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
-                    <CategorySelect value={category} onChange={setCategory} sourceType="quiz" placeholder="e.g., Science" />
+                    <CategorySelect
+                      value={category}
+                      onChange={setCategory}
+                      sourceType="quiz"
+                      placeholder="التصنيف اختياري"
+                    />
                   </div>
                   <div>
                     <div className="flex items-center justify-between mb-1">
@@ -968,7 +1148,7 @@ const QuizBuilder: React.FC = () => {
                     ref={fileInputRef}
                     onChange={handleFileUpload}
                     className="hidden"
-                    accept=".pdf,.docx,.pptx,.csv,.jpg,.jpeg,.png,.webp,.txt,.js,.ts,.py,.java,.cpp,.c,.html,.css"
+                    accept={ACCEPTED_FILE_TYPES}
                   />
                   {isGenerating ? (
                     <div className="flex flex-col items-center space-y-4">
@@ -982,7 +1162,10 @@ const QuizBuilder: React.FC = () => {
                       </div>
                       <div className="text-center">
                         <p className="text-lg font-semibold text-gray-900">Click to upload or drag and drop</p>
-                        <p className="text-sm text-gray-500">PDF, Word, Images, or CSV (Max 50MB)</p>
+                        <p className="text-sm text-gray-500">
+                          PDF, Word, PowerPoint, Excel, Images, CSV, or text
+                          <span className="block sm:inline"> (Max {formatFileSize(MAX_UPLOAD_SIZE_BYTES)})</span>
+                        </p>
                       </div>
                       <div className="flex items-center gap-3 pt-2 flex-wrap justify-center" onClick={(e) => e.stopPropagation()}>
                         <span className="text-sm text-gray-600">عدد الأسئلة:</span>
@@ -1124,6 +1307,53 @@ const QuizBuilder: React.FC = () => {
               )}
             </div>
 
+            {extractedMeta && (
+              <motion.div
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm space-y-4"
+              >
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <FileText className="w-5 h-5 text-indigo-600 flex-shrink-0" />
+                      <h3 className="text-lg font-bold text-gray-900">Extracted text preview</h3>
+                    </div>
+                    <p className="text-sm text-gray-500 break-all">{extractedMeta.fileName}</p>
+                    <p className="text-xs text-gray-400">
+                      {getExtractionLabel(extractedMeta.method)}
+                      {extractedMeta.length > 0 && ` · ${extractedMeta.returnedLength.toLocaleString()} characters ready for quiz generation`}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {extractedMeta.usedOcr && (
+                      <span className="inline-flex items-center rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 border border-emerald-100">
+                        OCR used
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setShowExtractedText(prev => !prev)}
+                      disabled={!extractedText}
+                      className="px-3 py-1.5 rounded-lg border border-gray-200 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {showExtractedText ? 'Hide text' : 'Show text'}
+                    </button>
+                  </div>
+                </div>
+
+                {showExtractedText && extractedText && (
+                  <ExtractedTextPreview text={extractedText} />
+                )}
+
+                {!extractedText && (
+                  <p className="rounded-xl bg-amber-50 border border-amber-100 px-4 py-3 text-sm text-amber-700">
+                    No extracted text preview is available because the image was sent directly to Gemini as a visual input.
+                  </p>
+                )}
+              </motion.div>
+            )}
+
             {/* Questions List (Review) */}
             {questions.length > 0 && (
               <div className="space-y-6">
@@ -1163,11 +1393,6 @@ const QuizBuilder: React.FC = () => {
         type={confirmConfig.type}
       />
 
-      <UpgradeModal
-        isOpen={upgradeModal.open}
-        reason={upgradeModal.reason}
-        onClose={() => setUpgradeModal(prev => ({ ...prev, open: false }))}
-      />
     </div>
   );
 };

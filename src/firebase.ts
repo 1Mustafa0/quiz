@@ -1,39 +1,9 @@
-import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
-import { getFirestore, doc, setDoc, getDoc, collection, query, where, onSnapshot, addDoc, updateDoc, deleteDoc, Timestamp, getDocFromServer, getDocs, increment } from 'firebase/firestore';
-import firebaseConfig from '../firebase-applet-config.json';
+import { getFirestore } from 'firebase/firestore';
+import { app, firebaseConfig } from './firebaseApp';
+import { auth, loginWithGoogle, logout } from './firebaseAuth';
 
-// Initialize Firebase SDK
-const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-export const auth = getAuth(app);
-export const googleProvider = new GoogleAuthProvider();
-
-// Auth Helpers
-export const loginWithGoogle = async () => {
-  try {
-    const result = await signInWithPopup(auth, googleProvider);
-    const user = result.user;
-    return user;
-  } catch (error: any) {
-    console.error('Login error:', error);
-    if (error?.code === 'auth/unauthorized-domain') {
-      const domain = window.location.hostname;
-      throw new Error(
-        `هذا الدومين غير مصرح به في Firebase: "${domain}"\n\nيجب إضافته في Firebase Console:\nAuthentication → Settings → Authorized domains`
-      );
-    }
-    if (error?.code === 'auth/popup-blocked') {
-      throw new Error('تم حجب النافذة المنبثقة. يرجى السماح بالنوافذ المنبثقة في المتصفح ثم المحاولة مرة أخرى.');
-    }
-    if (error?.code === 'auth/popup-closed-by-user') {
-      throw new Error('تم إغلاق نافذة تسجيل الدخول. يرجى المحاولة مرة أخرى.');
-    }
-    throw error;
-  }
-};
-
-export const logout = () => signOut(auth);
+export { auth, loginWithGoogle, logout };
 
 // Firestore Error Handler
 export enum OperationType {
@@ -61,7 +31,7 @@ export interface FirestoreErrorInfo {
       email: string | null;
       photoUrl: string | null;
     }[];
-  }
+  };
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
@@ -77,56 +47,12 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
         providerId: provider.providerId,
         displayName: provider.displayName,
         email: provider.email,
-        photoUrl: provider.photoURL
-      })) || []
+        photoUrl: provider.photoURL,
+      })) || [],
     },
     operationType,
-    path
-  }
+    path,
+  };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
-
-// ===============================================================
-// Visitor Tracking
-// ===============================================================
-
-const VISITOR_SESSION_KEY = 'aqm_visitor_session';
-
-function generateSessionId(): string {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return crypto.randomUUID();
-  }
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
-
-export async function trackVisit(uid?: string): Promise<void> {
-  try {
-    let sessionId = localStorage.getItem(VISITOR_SESSION_KEY);
-    if (!sessionId) {
-      sessionId = generateSessionId();
-      localStorage.setItem(VISITOR_SESSION_KEY, sessionId);
-    }
-    await fetch('/api/track-visit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId, ...(uid ? { uid } : {}) }),
-    }).catch((err) => {
-      console.warn('[trackVisit] Server call failed:', err?.message);
-    });
-  } catch (e: any) {
-    console.warn('[trackVisit] Unexpected error:', e?.message);
-  }
-}
-
-// Connection test
-async function testConnection() {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if(error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration. ");
-    }
-  }
-}
-testConnection();

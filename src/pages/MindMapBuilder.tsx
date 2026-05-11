@@ -3,15 +3,68 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { db } from '../firebase';
 import { collection, addDoc, Timestamp } from 'firebase/firestore';
-import { generateMindMap, generateMindMapFromContent, MindMapData } from '../services/mindmapService';
+import type { MindMapData } from '../services/mindmapService';
 import MindMapCanvas from '../components/MindMapCanvas';
 import CategorySelect from '../components/CategorySelect';
+import ExtractedTextPreview from '../components/ExtractedTextPreview';
 import { Sparkles, Save, Loader2, AlertCircle, Brain, Download, Upload, FileText, X, Type } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { ownerOnlyError } from '../utils/owner';
+import { normalizeCategory } from '../utils/categories';
+import { formatExtractedTextPreview } from '../utils/extractedText';
 
 type InputMode = 'topic' | 'file';
 
-const ACCEPTED = '.pdf,.doc,.docx,.ppt,.pptx,.txt,.md';
+const MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024;
+const ACCEPTED_FILE_TYPES = [
+  '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.csv',
+  '.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tif', '.tiff',
+  '.txt', '.js', '.ts', '.tsx', '.jsx', '.py', '.java', '.cpp', '.c', '.html', '.css', '.md', '.json',
+].join(',');
+
+interface ExtractionMeta {
+  fileName: string;
+  method: string;
+  usedOcr: boolean;
+  length: number;
+  returnedLength: number;
+}
+
+const EXTRACTION_LABELS: Record<string, string> = {
+  'pdf-parser': 'PDF text parser',
+  'gemini-ocr-pdf': 'Gemini OCR for scanned PDF',
+  'gemini-ocr-pdf-images': 'Gemini OCR for rendered PDF pages',
+  'gemini-ocr-image': 'Gemini OCR for image',
+  'gemini-ocr-office-images': 'Gemini OCR for embedded Office images',
+  'local-paddleocr-image': 'PaddleOCR for image',
+  'local-paddleocr-pdf-images': 'PaddleOCR for rendered PDF pages',
+  'local-paddleocr-office-images': 'PaddleOCR for embedded Office images',
+  'local-tesseractjs-image': 'Tesseract.js OCR for image',
+  'local-tesseractjs-pdf-images': 'Tesseract.js OCR for rendered PDF pages',
+  'local-tesseractjs-office-images': 'Tesseract.js OCR for embedded Office images',
+  'mixed-ocr-pdf-images': 'Mixed OCR engines for rendered PDF pages',
+  'mixed-ocr-office-images': 'Mixed OCR engines for embedded Office images',
+  'local-ocr-failed': 'Local OCR could not read enough text',
+  'gemini-vision-direct': 'Gemini image understanding',
+  'mammoth-docx': 'Word document parser',
+  'office-parser': 'Office document parser',
+  'csv-parser': 'CSV parser',
+  'plain-text': 'Plain text',
+  'utf8-fallback': 'Text fallback',
+};
+
+const SERVER_UNAVAILABLE_ERROR = 'The server is unavailable right now. Wait a moment, then try again.';
+
+const formatFileSize = (bytes: number) => {
+  if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+};
+
+const getExtractionLabel = (method: string) => EXTRACTION_LABELS[method] || method || 'Unknown extraction';
+const MINDMAP_GENERATION_ERROR = 'تعذر إنشاء الخريطة الذهنية حالياً. جرّب محتوى أوضح ثم حاول مرة أخرى.';
+const MINDMAP_FILE_ERROR = 'تعذر قراءة الملف. جرّب ملفاً نصياً أو صورة أوضح، ثم حاول مرة أخرى.';
+const MINDMAP_SAVE_ERROR = 'تعذر حفظ الخريطة الذهنية حالياً. حاول مرة أخرى لاحقاً.';
 
 const MindMapBuilder: React.FC = () => {
   const { user } = useAuth();
@@ -28,7 +81,102 @@ const MindMapBuilder: React.FC = () => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState('');
+  const [extractedText, setExtractedText] = useState('');
+  const [extractedMeta, setExtractedMeta] = useState<ExtractionMeta | null>(null);
+  const [showExtractedText, setShowExtractedText] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const generateMindMapOnServer = async (payload: {
+    topic?: string;
+    content?: string;
+    filename?: string;
+  }) => {
+    if (!user) {
+      throw new Error('User must be authenticated to generate mind maps.');
+    }
+
+    const token = await user.getIdToken();
+    const response = await fetch('/api/generate-mindmap', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data?.error || `Server returned ${response.status}`);
+    }
+    return data;
+  };
+
+  const parseFileOnServer = async (file: File): Promise<{ text: string; extraction?: any }> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const headers = new Headers();
+    if (user) {
+      headers.set('Authorization', `Bearer ${await user.getIdToken()}`);
+    }
+
+    const response = await fetch('/api/parse-file', {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+
+    const responseText = await response.text().catch(() => '');
+    if (!response.ok) {
+      let errorMessage = `Server error: ${response.status}`;
+      try {
+        const errorData = JSON.parse(responseText);
+        errorMessage = errorData.details || errorData.error || errorMessage;
+      } catch (e) {
+        if (responseText.includes('<!DOCTYPE html>')) {
+          errorMessage = 'Server returned HTML instead of JSON. The backend might not be running correctly.';
+        } else if (responseText) {
+          errorMessage = responseText.substring(0, 200);
+        }
+      }
+      throw new Error(errorMessage);
+    }
+
+    try {
+      return JSON.parse(responseText);
+    } catch (e) {
+      if (responseText.includes('<!DOCTYPE html>')) {
+        throw new Error('Server returned HTML instead of JSON. The backend might not be running correctly.');
+      }
+      throw new Error('Failed to parse server response as JSON.');
+    }
+  };
+
+  const generateMindMapFromExtractedText = async (file: File, text: string, extraction?: any) => {
+    const cleanText = typeof text === 'string' ? text.trim() : '';
+    if (cleanText === '[object Object]' || cleanText.length < 10) {
+      throw new Error('Could not extract enough readable text from this file.');
+    }
+
+    const formattedText = formatExtractedTextPreview(cleanText) || cleanText;
+
+    setExtractedText(formattedText);
+    setExtractedMeta({
+      fileName: file.name,
+      method: extraction?.method || 'unknown',
+      usedOcr: Boolean(extraction?.usedOcr),
+      length: Number(extraction?.length || cleanText.length),
+      returnedLength: Number(extraction?.returnedLength || formattedText.length),
+    });
+    setShowExtractedText(true);
+    setIsUploading(false);
+    setUploadProgress('AI is analyzing extracted content...');
+
+    const data = await generateMindMapOnServer({ content: formattedText, filename: file.name });
+    setMapData(data);
+    setTopic(data.topic);
+    navigate('/mindmaps/editor', { state: { mapData: data, category: normalizeCategory(category) } });
+  };
 
   const handleGenerateFromTopic = async () => {
     if (!topic.trim()) return;
@@ -36,11 +184,12 @@ const MindMapBuilder: React.FC = () => {
     setError(null);
     setMapData(null);
     try {
-      const data = await generateMindMap(topic.trim());
+      const data = await generateMindMapOnServer({ topic: topic.trim() });
       setMapData(data);
-      navigate('/mindmaps/editor', { state: { mapData: data, category: category || 'General' } });
+      navigate('/mindmaps/editor', { state: { mapData: data, category: normalizeCategory(category) } });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to generate mind map. Please try again.');
+      console.error('[MindMapBuilder] topic generation failed:', e);
+      setError(ownerOnlyError(user, MINDMAP_GENERATION_ERROR, e));
     } finally {
       setIsGenerating(false);
     }
@@ -48,32 +197,40 @@ const MindMapBuilder: React.FC = () => {
 
   const handleGenerateFromFile = async () => {
     if (!selectedFile) return;
+    if (selectedFile.size > MAX_UPLOAD_SIZE_BYTES) {
+      setError(`File is too large. Maximum upload size is ${formatFileSize(MAX_UPLOAD_SIZE_BYTES)}.`);
+      return;
+    }
+
     setIsUploading(true);
     setIsGenerating(true);
     setError(null);
     setMapData(null);
+    setExtractedText('');
+    setExtractedMeta(null);
+    setShowExtractedText(false);
+
+    let fileWasParsed = false;
 
     try {
-      setUploadProgress('Uploading file...');
-      const formData = new FormData();
-      formData.append('file', selectedFile);
-
-      const res = await fetch('/api/parse-file', { method: 'POST', body: formData });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Failed to parse file.');
+      setUploadProgress('Checking server...');
+      const healthCheck = await fetch('/api/health').then(r => r.json()).catch(() => null);
+      if (!healthCheck || healthCheck.status !== 'ok') {
+        throw new Error('Backend server is not responding.');
       }
-      const { text } = await res.json();
-      if (!text || text.length < 20) throw new Error('Could not extract text from this file. Try a different format.');
 
-      setIsUploading(false);
-      setUploadProgress('AI is analyzing content...');
-      const data = await generateMindMapFromContent(text, selectedFile.name);
-      setMapData(data);
-      setTopic(data.topic);
-      navigate('/mindmaps/editor', { state: { mapData: data, category: category || 'General' } });
+      setUploadProgress('Extracting text with OCR when needed...');
+      const parsed = await parseFileOnServer(selectedFile);
+      fileWasParsed = true;
+      await generateMindMapFromExtractedText(selectedFile, parsed.text, parsed.extraction);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to process file. Please try again.');
+      console.error('[MindMapBuilder] file generation failed:', e);
+      const fallbackError = e instanceof Error && e.message === 'Backend server is not responding.'
+        ? SERVER_UNAVAILABLE_ERROR
+        : fileWasParsed
+          ? MINDMAP_GENERATION_ERROR
+          : MINDMAP_FILE_ERROR;
+      setError(ownerOnlyError(user, fallbackError, e));
     } finally {
       setIsGenerating(false);
       setIsUploading(false);
@@ -88,14 +245,15 @@ const MindMapBuilder: React.FC = () => {
       await addDoc(collection(db, 'mindmaps'), {
         topic: mapData.topic,
         title: mapData.topic,
-        category: category || 'General',
+        category: normalizeCategory(category),
         data: mapData,
         authorUid: user.uid,
         createdAt: Timestamp.now(),
       });
       navigate('/mindmaps');
     } catch (e) {
-      setError('Failed to save. Please try again.');
+      console.error('[MindMapBuilder] save failed:', e);
+      setError(ownerOnlyError(user, MINDMAP_SAVE_ERROR, e));
     } finally {
       setIsSaving(false);
     }
@@ -114,19 +272,39 @@ const MindMapBuilder: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
+  const resetExtractionPreview = () => {
+    setExtractedText('');
+    setExtractedMeta(null);
+    setShowExtractedText(false);
+  };
+
+  const setFileForMindMap = (file: File) => {
+    resetExtractionPreview();
+    setMapData(null);
+    if (file.size > MAX_UPLOAD_SIZE_BYTES) {
+      setSelectedFile(null);
+      setError(`File is too large. Maximum upload size is ${formatFileSize(MAX_UPLOAD_SIZE_BYTES)}.`);
+      return;
+    }
+    setError(null);
+    setSelectedFile(file);
+  };
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
-    if (f) setSelectedFile(f);
+    if (f) setFileForMindMap(f);
+    if (e.target) e.target.value = '';
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const f = e.dataTransfer.files?.[0];
-    if (f) setSelectedFile(f);
+    if (f) setFileForMindMap(f);
   };
 
   const clearFile = () => {
     setSelectedFile(null);
+    resetExtractionPreview();
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -254,7 +432,7 @@ const MindMapBuilder: React.FC = () => {
                       <div className="text-left">
                         <p className="font-semibold text-gray-900 dark:text-white">{selectedFile.name}</p>
                         <p className="text-sm text-gray-500 dark:text-slate-400">
-                          {(selectedFile.size / 1024).toFixed(1)} KB · Ready to generate
+                          {formatFileSize(selectedFile.size)} - Ready to generate
                         </p>
                       </div>
                       <button
@@ -275,7 +453,8 @@ const MindMapBuilder: React.FC = () => {
                           <span className="text-indigo-600 dark:text-indigo-400">browse</span>
                         </p>
                         <p className="text-sm text-gray-400 dark:text-slate-500 mt-1">
-                          PDF, Word (.docx), PowerPoint (.pptx), or plain text
+                          PDF, Word, PowerPoint, Excel, Images, CSV, code, or text
+                          <span className="block sm:inline"> (Max {formatFileSize(MAX_UPLOAD_SIZE_BYTES)})</span>
                         </p>
                       </div>
                     </div>
@@ -283,7 +462,7 @@ const MindMapBuilder: React.FC = () => {
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept={ACCEPTED}
+                    accept={ACCEPTED_FILE_TYPES}
                     className="hidden"
                     onChange={handleFileSelect}
                   />
@@ -295,6 +474,47 @@ const MindMapBuilder: React.FC = () => {
                   </label>
                   <CategorySelect value={category} onChange={setCategory} sourceType="mindmap" />
                 </div>
+
+                {extractedMeta && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="rounded-2xl border border-indigo-100 dark:border-indigo-900/40 bg-indigo-50/70 dark:bg-indigo-950/20 p-4 space-y-3"
+                  >
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex items-center gap-2">
+                          <FileText className="w-5 h-5 text-indigo-600 dark:text-indigo-400 flex-shrink-0" />
+                          <h3 className="text-base font-bold text-gray-900 dark:text-white">Extracted text ready</h3>
+                        </div>
+                        <p className="text-sm text-gray-500 dark:text-slate-400 break-all">{extractedMeta.fileName}</p>
+                        <p className="text-xs text-gray-500 dark:text-slate-400">
+                          {getExtractionLabel(extractedMeta.method)}
+                          {extractedMeta.length > 0 && ` - ${extractedMeta.returnedLength.toLocaleString()} characters ready for mind map generation`}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {extractedMeta.usedOcr && (
+                          <span className="inline-flex items-center rounded-full bg-emerald-50 dark:bg-emerald-900/30 px-3 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300 border border-emerald-100 dark:border-emerald-800">
+                            OCR used
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setShowExtractedText(prev => !prev)}
+                          disabled={!extractedText}
+                          className="px-3 py-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-800 text-sm font-medium text-gray-600 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {showExtractedText ? 'Hide text' : 'Show text'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {showExtractedText && extractedText && (
+                      <ExtractedTextPreview text={extractedText} className="border-indigo-100 dark:border-indigo-900" />
+                    )}
+                  </motion.div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
@@ -328,7 +548,7 @@ const MindMapBuilder: React.FC = () => {
             className="flex items-center gap-3 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl text-red-600 dark:text-red-400"
           >
             <AlertCircle className="w-5 h-5 flex-shrink-0" />
-            <span className="text-sm font-medium">{error}</span>
+            <span className="text-sm font-medium whitespace-pre-line" dir="auto">{error}</span>
             <button onClick={() => setError(null)} className="ml-auto text-red-400 hover:text-red-600 font-bold">✕</button>
           </motion.div>
         )}
@@ -345,10 +565,10 @@ const MindMapBuilder: React.FC = () => {
           </div>
           <div className="text-center space-y-1">
             <p className="text-gray-700 dark:text-slate-300 font-semibold">
-              {isUploading ? 'Reading your file...' : 'Building your mind map...'}
+              {isUploading ? 'Extracting readable text...' : 'Building your mind map...'}
             </p>
             <p className="text-sm text-gray-400 dark:text-slate-500">
-              {isUploading ? 'Extracting text content' : 'AI is analyzing and structuring concepts'}
+              {isUploading ? 'Using document parsing and OCR when needed' : 'AI is analyzing and structuring concepts'}
             </p>
           </div>
         </div>

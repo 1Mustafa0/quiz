@@ -3,13 +3,19 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import {
   Sparkles, Brain, Library, ArrowRight, Upload,
-  Cpu, Play, FileText, Globe, Zap, Star
+  Cpu, Play, FileText, Globe, Zap, Star, Loader2
 } from 'lucide-react';
 import { motion } from 'motion/react';
 
 const Home: React.FC = () => {
-  const { user, login } = useAuth();
+  const { user, login, loginLoading } = useAuth();
   const navigate = useNavigate();
+
+  const handleLogin = () => {
+    void login().catch(() => {
+      // The shared layout displays the login error.
+    });
+  };
 
   const mainFeatures = [
     {
@@ -67,7 +73,7 @@ const Home: React.FC = () => {
   ];
 
   return (
-    <div className="space-y-20 pb-20 -mt-4">
+    <div className="space-y-20 pb-20 mt-6 sm:mt-8">
 
       {/* Personal Touch Banner */}
       <div className="text-center py-2 animate-pulse">
@@ -79,16 +85,6 @@ const Home: React.FC = () => {
       {/* Hero Section */}
       <section className="relative text-center space-y-8 max-w-5xl mx-auto overflow-hidden">
         <div className="absolute -top-20 left-1/2 -translate-x-1/2 w-[600px] h-[400px] bg-gradient-to-r from-indigo-200/40 to-purple-200/40 dark:from-indigo-900/20 dark:to-purple-900/20 rounded-full blur-3xl pointer-events-none" />
-
-        <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.5 }}
-          className="relative inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-50 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 text-sm font-medium border border-indigo-100 dark:border-indigo-800"
-        >
-          <Sparkles className="w-4 h-4" />
-          Powered by Gemini AI
-        </motion.div>
 
         <motion.h1
           initial={{ opacity: 0, y: 20 }}
@@ -121,7 +117,7 @@ const Home: React.FC = () => {
           {user ? (
             <Link
               to="/builder"
-              className="group inline-flex items-center gap-2 px-8 py-4 text-lg font-bold rounded-2xl text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 shadow-xl shadow-indigo-200/60 dark:shadow-indigo-900/30 hover:shadow-2xl transition-all transform hover:-translate-y-1"
+              className="w-full sm:w-auto justify-center group inline-flex items-center gap-2 px-8 py-4 text-lg font-bold rounded-2xl text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 shadow-xl shadow-indigo-200/60 dark:shadow-indigo-900/30 hover:shadow-2xl transition-all transform hover:-translate-y-1"
             >
               <Sparkles className="w-5 h-5 group-hover:rotate-12 transition-transform" />
               Create a Quiz
@@ -129,17 +125,19 @@ const Home: React.FC = () => {
             </Link>
           ) : (
             <button
-              onClick={() => login()}
-              className="group inline-flex items-center gap-2 px-8 py-4 text-lg font-bold rounded-2xl text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 shadow-xl shadow-indigo-200/60 dark:shadow-indigo-900/30 hover:shadow-2xl transition-all transform hover:-translate-y-1"
+              onClick={handleLogin}
+              disabled={loginLoading}
+              aria-busy={loginLoading}
+              className="w-full sm:w-auto justify-center group inline-flex items-center gap-2 px-8 py-4 text-lg font-bold rounded-2xl text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:from-indigo-400 disabled:to-purple-400 disabled:cursor-not-allowed shadow-xl shadow-indigo-200/60 dark:shadow-indigo-900/30 hover:shadow-2xl transition-all transform hover:-translate-y-1 disabled:hover:translate-y-0"
             >
-              <Sparkles className="w-5 h-5 group-hover:rotate-12 transition-transform" />
-              Get Started Free
+              {loginLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5 group-hover:rotate-12 transition-transform" />}
+              {loginLoading ? 'Signing in...' : 'Get Started Free'}
               <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
             </button>
           )}
           <Link
             to="/library"
-            className="inline-flex items-center gap-2 px-8 py-4 text-lg font-semibold rounded-2xl text-gray-700 dark:text-slate-300 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 hover:bg-gray-50 dark:hover:bg-slate-700 shadow-md hover:shadow-lg transition-all transform hover:-translate-y-1"
+            className="w-full sm:w-auto justify-center inline-flex items-center gap-2 px-8 py-4 text-lg font-semibold rounded-2xl text-gray-700 dark:text-slate-300 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 hover:bg-gray-50 dark:hover:bg-slate-700 shadow-md hover:shadow-lg transition-all transform hover:-translate-y-1"
           >
             <Library className="w-5 h-5" />
             Browse Quizzes
@@ -165,13 +163,15 @@ const Home: React.FC = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {mainFeatures.map((feature, index) => (
-            <motion.div
+            <motion.button
               key={feature.title}
+              type="button"
               initial={{ opacity: 0, y: 30 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5, delay: 0.12 * (index + 1) }}
-              onClick={() => user ? navigate(feature.path) : login()}
-              className={`relative group cursor-pointer p-8 bg-gradient-to-br ${feature.bg} rounded-3xl border border-white/80 dark:border-slate-700 shadow-sm hover:shadow-xl transition-all duration-300 hover:-translate-y-2 overflow-hidden`}
+              onClick={() => user ? navigate(feature.path) : handleLogin()}
+              aria-label={`Go to ${feature.title}`}
+              className={`relative group w-full text-left p-8 bg-gradient-to-br ${feature.bg} rounded-3xl border border-white/80 dark:border-slate-700 shadow-sm hover:shadow-xl transition-all duration-300 hover:-translate-y-2 overflow-hidden`}
             >
               <div className={`absolute -top-8 -right-8 w-32 h-32 bg-gradient-to-br ${feature.gradient} opacity-10 rounded-full blur-2xl group-hover:opacity-25 transition-opacity duration-300`} />
               <div className={`w-16 h-16 bg-gradient-to-br ${feature.gradient} rounded-2xl flex items-center justify-center mb-6 shadow-lg group-hover:scale-110 transition-transform duration-300`}>
@@ -183,7 +183,7 @@ const Home: React.FC = () => {
                 <span>Get Started</span>
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </div>
-            </motion.div>
+            </motion.button>
           ))}
         </div>
       </section>
@@ -235,7 +235,7 @@ const Home: React.FC = () => {
             More Features
           </h2>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
           {capabilities.map((cap, index) => (
             <motion.div
               key={cap.label}
@@ -255,7 +255,7 @@ const Home: React.FC = () => {
       </section>
 
       {/* CTA Banner */}
-      <section className="relative bg-gradient-to-br from-indigo-600 via-purple-600 to-indigo-700 rounded-3xl p-12 text-center text-white space-y-8 overflow-hidden">
+      <section className="relative bg-gradient-to-br from-indigo-600 via-purple-600 to-indigo-700 rounded-3xl p-8 sm:p-10 md:p-12 text-center text-white space-y-8 overflow-hidden">
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
           <div className="absolute -top-16 -left-16 w-48 h-48 bg-white/10 rounded-full blur-3xl" />
           <div className="absolute -bottom-16 -right-16 w-64 h-64 bg-purple-400/20 rounded-full blur-3xl" />
@@ -289,26 +289,28 @@ const Home: React.FC = () => {
             </>
           ) : (
             <button
-              onClick={() => login()}
-              className="inline-flex items-center gap-2 px-10 py-4 bg-white text-indigo-600 font-bold text-lg rounded-2xl hover:bg-indigo-50 shadow-2xl transition-all hover:-translate-y-1"
+              onClick={handleLogin}
+              disabled={loginLoading}
+              aria-busy={loginLoading}
+              className="inline-flex items-center gap-2 px-10 py-4 bg-white text-indigo-600 font-bold text-lg rounded-2xl hover:bg-indigo-50 disabled:bg-indigo-100 disabled:cursor-not-allowed shadow-2xl transition-all hover:-translate-y-1 disabled:hover:translate-y-0"
             >
-              <Sparkles className="w-5 h-5" />
-              Get Started Free
+              {loginLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
+              {loginLoading ? 'Signing in...' : 'Get Started Free'}
               <ArrowRight className="w-5 h-5" />
             </button>
           )}
         </div>
 
-        <div className="relative flex justify-center gap-12 pt-2">
-          <div className="text-center">
+        <div className="relative grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 text-center">
+          <div>
             <div className="text-3xl font-black">50+</div>
             <div className="text-indigo-200 text-sm mt-1">Languages</div>
           </div>
-          <div className="text-center">
+          <div>
             <div className="text-3xl font-black">30s</div>
             <div className="text-indigo-200 text-sm mt-1">To Generate a Quiz</div>
           </div>
-          <div className="text-center">
+          <div>
             <div className="text-3xl font-black">100%</div>
             <div className="text-indigo-200 text-sm mt-1">Free</div>
           </div>

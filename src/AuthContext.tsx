@@ -1,22 +1,20 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { auth, loginWithGoogle, logout, db } from './firebase';
+import { auth, loginWithGoogle, logout } from './firebaseAuth';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc, Timestamp } from 'firebase/firestore';
-
-const OWNER_EMAIL = 'mstfyalswdany913@gmail.com';
+import { OWNER_EMAIL } from './utils/owner';
 
 interface AuthContextType {
   user: User | null;
   role: string | null;
-  plan: 'free' | 'pro';
   loading: boolean;
+  loginLoading: boolean;
+  loginError: string | null;
   isQuizActive: boolean;
   setIsQuizActive: (active: boolean) => void;
   showWelcome: boolean;
   setShowWelcome: (show: boolean) => void;
   login: () => Promise<User>;
   logout: () => Promise<void>;
-  refreshPlan: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -24,37 +22,16 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [role, setRole] = useState<string | null>(null);
-  const [plan, setPlan] = useState<'free' | 'pro'>('free');
   const [loading, setLoading] = useState(true);
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
   const [isQuizActive, setIsQuizActive] = useState(false);
   const [showWelcome, setShowWelcome] = useState(false);
 
-  const fetchPlan = async (firebaseUser: any): Promise<'free' | 'pro'> => {
+  const syncUserToServer = async (firebaseUser: any, userRole: string) => {
     try {
       const idToken = await firebaseUser.getIdToken();
-      const res = await fetch('/api/user/plan', {
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        return data.plan === 'pro' ? 'pro' : 'free';
-      }
-    } catch (e: any) {
-      console.warn('[AuthContext] fetchPlan error:', e?.message);
-    }
-    return 'free';
-  };
-
-  const refreshPlan = async () => {
-    if (!user) return;
-    const p = await fetchPlan(user);
-    setPlan(p);
-  };
-
-  const syncUserToServer = async (firebaseUser: any, userRole: string): Promise<'free' | 'pro'> => {
-    try {
-      const idToken = await firebaseUser.getIdToken();
-      const res = await fetch('/api/user/sync', {
+      await fetch('/api/user/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
         body: JSON.stringify({
@@ -65,14 +42,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           role: userRole,
         }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        return data.plan === 'pro' ? 'pro' : 'free';
-      }
     } catch (e: any) {
       console.warn('[AuthContext] syncUserToServer error:', e?.message);
     }
-    return 'free';
   };
 
   useEffect(() => {
@@ -82,6 +54,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         let userRole: string = isOwner ? 'admin' : 'user';
 
         try {
+          const [{ db }, { doc, getDoc, setDoc, updateDoc, Timestamp }] = await Promise.all([
+            import('./firebase'),
+            import('firebase/firestore'),
+          ]);
           const userRef = doc(db, 'users', firebaseUser.uid);
           const userDoc = await getDoc(userRef).catch(() => null);
 
@@ -132,12 +108,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           console.error('Auth profile error:', err);
         }
 
-        const userPlan = await syncUserToServer(firebaseUser, userRole);
-        setPlan(userPlan);
+        await syncUserToServer(firebaseUser, userRole);
         setRole(userRole);
       } else {
         setRole(null);
-        setPlan('free');
       }
 
       setUser(firebaseUser);
@@ -148,31 +122,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const login = async () => {
-    const u = await loginWithGoogle();
-    setUser(u);
-    return u;
+    setLoginLoading(true);
+    setLoginError(null);
+
+    try {
+      const u = await loginWithGoogle();
+      setUser(u);
+      return u;
+    } catch (err: any) {
+      const message = err?.message || 'تعذر تسجيل الدخول. حاول مرة أخرى.';
+      setLoginError(message);
+      throw err;
+    } finally {
+      setLoginLoading(false);
+    }
   };
 
   const handleLogout = async () => {
     await logout();
     setUser(null);
     setRole(null);
-    setPlan('free');
   };
 
   return (
     <AuthContext.Provider value={{
       user,
       role,
-      plan,
       loading,
+      loginLoading,
+      loginError,
       isQuizActive,
       setIsQuizActive,
       showWelcome,
       setShowWelcome,
       login,
       logout: handleLogout,
-      refreshPlan,
     }}>
       {children}
     </AuthContext.Provider>

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
-import { MindMapData } from '../services/mindmapService';
+import type { MindMapData } from '../services/mindmapService';
 import { X, RotateCcw, Shuffle, CheckCircle, XCircle, SkipForward, Trophy } from 'lucide-react';
 
 const PALETTE = [

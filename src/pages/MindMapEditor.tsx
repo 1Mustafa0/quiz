@@ -1,25 +1,27 @@
 import React, { useState, useEffect } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { db } from '../firebase';
-import { collection, addDoc, doc, updateDoc, Timestamp } from 'firebase/firestore';
-import { MindMapData } from '../services/mindmapService';
+import { collection, addDoc, doc, updateDoc, Timestamp, getDoc } from 'firebase/firestore';
+import type { MindMapData } from '../services/mindmapService';
 import MindMapCanvas from '../components/MindMapCanvas';
 import CategorySelect from '../components/CategorySelect';
 import PresentationMode from '../components/PresentationMode';
 import FlashcardMode from '../components/FlashcardMode';
 import { Save, Download, ArrowLeft, Loader2, Brain, Check, Presentation, BookOpen } from 'lucide-react';
+import { normalizeCategory } from '../utils/categories';
 
 const MindMapEditor: React.FC = () => {
   const { user } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+  const { docId: routeDocId } = useParams<{ docId?: string }>();
 
   const state = location.state as { mapData?: MindMapData; category?: string; docId?: string } | null;
 
-  const [mapData, setMapData] = useState<MindMapData | null>(null);
-  const [category, setCategory] = useState(state?.category || 'General');
-  const [docId, setDocId] = useState<string | null>(state?.docId || null);
+  const [mapData, setMapData] = useState<MindMapData | null>(state?.mapData || null);
+  const [category, setCategory] = useState(normalizeCategory(state?.category));
+  const [docId, setDocId] = useState<string | null>(state?.docId || routeDocId || null);
   const [isSaving, setIsSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,12 +29,38 @@ const MindMapEditor: React.FC = () => {
   const [showFlashcards, setShowFlashcards] = useState(false);
 
   useEffect(() => {
-    if (state?.mapData) {
-      setMapData(state.mapData);
-    } else {
-      navigate('/mindmaps/builder', { replace: true });
-    }
-  }, []);
+    const loadFromFirestore = async () => {
+      if (!routeDocId) {
+        if (!state?.mapData) {
+          navigate('/mindmaps/builder', { replace: true });
+        }
+        return;
+      }
+
+      if (state?.mapData && state.docId === routeDocId) {
+        return;
+      }
+
+      try {
+        const snap = await getDoc(doc(db, 'mindmaps', routeDocId));
+        if (!snap.exists()) {
+          navigate('/mindmaps', { replace: true });
+          return;
+        }
+
+        const data = snap.data();
+        const fetchedMapData = data.data as MindMapData;
+        setMapData(fetchedMapData);
+        setCategory(normalizeCategory(data.category));
+        setDocId(routeDocId);
+      } catch (err) {
+        console.error('Failed to load mind map:', err);
+        navigate('/mindmaps', { replace: true });
+      }
+    };
+
+    loadFromFirestore();
+  }, [routeDocId, state?.mapData, state?.docId, navigate]);
 
   const handleSave = async () => {
     if (!user || !mapData) return;
@@ -41,12 +69,12 @@ const MindMapEditor: React.FC = () => {
     try {
       if (docId) {
         await updateDoc(doc(db, 'mindmaps', docId), {
-          topic: mapData.topic, title: mapData.topic, category,
+          topic: mapData.topic, title: mapData.topic, category: normalizeCategory(category),
           data: mapData, updatedAt: Timestamp.now(),
         });
       } else {
         const ref = await addDoc(collection(db, 'mindmaps'), {
-          topic: mapData.topic, title: mapData.topic, category,
+          topic: mapData.topic, title: mapData.topic, category: normalizeCategory(category),
           data: mapData, authorUid: user.uid, createdAt: Timestamp.now(),
         });
         setDocId(ref.id);

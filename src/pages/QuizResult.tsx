@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { doc, getDoc } from 'firebase/firestore';
-import { CheckCircle2, XCircle, Trophy, RotateCcw, Library, ChevronDown, ChevronUp, MessageSquare, Bookmark } from 'lucide-react';
+import { AlertCircle, CheckCircle2, XCircle, Trophy, RotateCcw, Library, ChevronDown, ChevronUp, MessageSquare, Bookmark } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface AnswerResult {
@@ -24,21 +24,21 @@ interface Result {
 
 const QuizResult: React.FC = () => {
   const { resultId } = useParams<{ resultId: string }>();
-  const navigate = useNavigate();
   const [result, setResult] = useState<Result | null>(null);
   const [loading, setLoading] = useState(true);
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
 
   useEffect(() => {
     const fetchResult = async () => {
-      if (!resultId) return;
+      if (!resultId) {
+        setLoading(false);
+        return;
+      }
       try {
         const docRef = doc(db, 'results', resultId);
         const docSnap = await getDoc(docRef);
         if (docSnap.exists()) {
           setResult(docSnap.data() as Result);
-        } else {
-          navigate('/library');
         }
       } catch (error) {
         handleFirestoreError(error, OperationType.GET, `results/${resultId}`);
@@ -48,10 +48,27 @@ const QuizResult: React.FC = () => {
     };
 
     fetchResult();
-  }, [resultId, navigate]);
+  }, [resultId]);
 
   if (loading) return <div className="flex items-center justify-center min-h-[60vh]"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div></div>;
-  if (!result) return null;
+  if (!result) {
+    return (
+      <div className="flex min-h-[60vh] flex-col items-center justify-center space-y-4 text-center">
+        <AlertCircle className="h-12 w-12 text-amber-500" />
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">لم يتم العثور على النتيجة</h2>
+          <p className="mt-2 text-gray-600 dark:text-slate-400">قد تكون النتيجة محذوفة أو غير متاحة لهذا الحساب.</p>
+        </div>
+        <Link
+          to="/library"
+          className="inline-flex items-center rounded-xl bg-indigo-600 px-6 py-3 font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700"
+        >
+          <Library className="mr-2 h-5 w-5" />
+          العودة للمكتبة
+        </Link>
+      </div>
+    );
+  }
 
   const percentage = Math.round((result.score / result.totalQuestions) * 100);
   

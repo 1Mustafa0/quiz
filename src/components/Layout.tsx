@@ -2,11 +2,11 @@ import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
-import { LogIn, LogOut, PlusCircle, Library, Home as HomeIcon, AlertCircle, Shield, History, User, Brain, Menu, X, CheckSquare, Sun, Moon, Crown } from 'lucide-react';
+import { LogIn, LogOut, PlusCircle, Library, Home as HomeIcon, AlertCircle, Shield, History, User, Brain, Menu, X, CheckSquare, Sun, Moon, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user, role, plan, login, logout, isQuizActive } = useAuth();
+  const { user, role, login, logout, isQuizActive, loginLoading, loginError } = useAuth();
   const { isDark, toggleTheme } = useTheme();
   const location = useLocation();
   const navigate = useNavigate();
@@ -15,7 +15,6 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
   const navItems = [
     { name: 'Home', path: '/', icon: HomeIcon },
-    { name: 'Pricing', path: '/pricing', icon: Crown },
     { name: 'Quiz Builder', path: '/builder', icon: PlusCircle, protected: true },
     { name: 'My Quizzes', path: '/library', icon: Library, protected: true },
     { name: 'Mind Maps', path: '/mindmaps', icon: Brain, protected: true },
@@ -40,9 +39,15 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     }
   };
 
+  const handleLogin = () => {
+    void login().catch(() => {
+      // AuthContext stores the user-facing error in loginError.
+    });
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-slate-900 flex flex-col transition-colors duration-300">
-      <nav className="bg-white dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700 sticky top-0 z-50 transition-colors duration-300">
+      <nav role="navigation" aria-label="Main navigation" className="bg-white dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700 sticky top-0 z-50 transition-colors duration-300">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
             <div className="flex items-center">
@@ -50,9 +55,13 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 onClick={() => handleNavClick('/')}
                 className="flex items-center space-x-2 cursor-pointer group"
               >
-                <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center group-hover:bg-indigo-700 transition-all shadow-sm group-hover:shadow-md">
+                <motion.div
+                  whileHover={{ y: -1, rotate: -2 }}
+                  whileTap={{ scale: 0.96 }}
+                  className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center group-hover:bg-indigo-700 transition-all shadow-sm group-hover:shadow-md"
+                >
                   <Brain className="text-white w-6 h-6" />
-                </div>
+                </motion.div>
                 <span className="text-xl font-bold text-gray-900 dark:text-white tracking-tight">AI Quiz Master</span>
               </div>
               <div className="hidden lg:ml-8 lg:flex lg:space-x-4">
@@ -61,18 +70,29 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   if (item.adminOnly && role !== 'admin') return null;
                   const isActive = location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(item.path));
                   return (
-                    <button
+                    <motion.button
                       key={item.name}
                       onClick={() => handleNavClick(item.path)}
-                      className={`inline-flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors ${
+                      aria-current={isActive ? 'page' : undefined}
+                      whileTap={{ scale: 0.97 }}
+                      className={`relative inline-flex items-center overflow-hidden px-3 py-2 text-sm font-medium rounded-xl transition-colors ${
                         isActive
-                          ? 'text-indigo-600 bg-indigo-50 dark:bg-indigo-900/40 dark:text-indigo-400'
+                          ? 'text-indigo-600 dark:text-indigo-400'
                           : 'text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200 hover:bg-gray-100 dark:hover:bg-slate-700'
                       }`}
                     >
-                      <item.icon className="w-4 h-4 mr-2" />
-                      {item.name}
-                    </button>
+                      {isActive && (
+                        <motion.span
+                          layoutId="desktop-active-nav"
+                          className="absolute inset-0 rounded-xl bg-indigo-50 dark:bg-indigo-900/40"
+                          transition={{ duration: 0.16, ease: 'easeOut' }}
+                        />
+                      )}
+                      <span className="relative inline-flex items-center">
+                        <item.icon className="w-4 h-4 mr-2" />
+                        {item.name}
+                      </span>
+                    </motion.button>
                   );
                 })}
               </div>
@@ -108,11 +128,6 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                         Admin
                       </span>
                     )}
-                    {plan === 'pro' && role !== 'admin' && (
-                      <span className="hidden sm:inline-flex items-center gap-0.5 bg-violet-100 dark:bg-violet-900/50 text-violet-700 dark:text-violet-300 text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider">
-                        <Crown className="w-2.5 h-2.5" /> Pro
-                      </span>
-                    )}
                   </button>
                   <button
                     onClick={() => logout()}
@@ -124,12 +139,14 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 </div>
               ) : (
                 <button
-                  onClick={() => login()}
-                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 shadow-sm transition-all"
+                  onClick={handleLogin}
+                  disabled={loginLoading}
+                  aria-busy={loginLoading}
+                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 disabled:cursor-not-allowed shadow-sm transition-all"
                 >
-                  <LogIn className="w-4 h-4 mr-2" />
-                  <span className="hidden sm:inline">Sign In</span>
-                  <span className="sm:hidden">Login</span>
+                  {loginLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <LogIn className="w-4 h-4 mr-2" />}
+                  <span className="hidden sm:inline">{loginLoading ? 'Signing in...' : 'Sign In'}</span>
+                  <span className="sm:hidden">{loginLoading ? '...' : 'Login'}</span>
                 </button>
               )}
 
@@ -154,17 +171,21 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               className="lg:hidden border-t border-gray-100 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden"
             >
               <div className="px-4 pt-2 pb-6 space-y-1">
-                {navItems.map((item) => {
+                {navItems.map((item, index) => {
                   if (item.protected && !user) return null;
                   if (item.adminOnly && role !== 'admin') return null;
                   const isActive = location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(item.path));
                   return (
-                    <button
+                    <motion.button
                       key={item.name}
                       onClick={() => {
                         handleNavClick(item.path);
                         setIsMobileMenuOpen(false);
                       }}
+                      initial={{ opacity: 0, x: -8 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: index * 0.03, duration: 0.18 }}
+                      whileTap={{ scale: 0.98 }}
                       className={`flex items-center w-full px-4 py-3 text-base font-medium rounded-xl transition-all ${
                         isActive
                           ? 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/40'
@@ -173,7 +194,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                     >
                       <item.icon className={`w-5 h-5 mr-4 ${isActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-slate-500'}`} />
                       {item.name}
-                    </button>
+                    </motion.button>
                   );
                 })}
                 {user && (
@@ -194,16 +215,27 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         </AnimatePresence>
       </nav>
 
+      <AnimatePresence>
+        {loginError && !user && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="mx-auto mt-4 w-[calc(100%-2rem)] max-w-3xl rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-sm dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200"
+            role="alert"
+          >
+            <div className="flex items-start gap-2">
+              <AlertCircle className="mt-0.5 h-4 w-4 flex-none" />
+              <span className="whitespace-pre-line" dir="auto">{loginError}</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <main className="flex-grow">
-        <motion.div
-          key={location.pathname}
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.3 }}
-          className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8"
-        >
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
           {children}
-        </motion.div>
+        </div>
       </main>
 
       <footer className="bg-white dark:bg-slate-800 border-t border-gray-200 dark:border-slate-700 py-8 transition-colors duration-300">

@@ -1,6 +1,6 @@
 import React, { useRef, useState, useCallback, useEffect, useMemo } from 'react';
-import { MindMapData } from '../services/mindmapService';
-import { ZoomIn, ZoomOut, Maximize2, MousePointer2, Plus, Pencil, Trash2 } from 'lucide-react';
+import type { MindMapData } from '../services/mindmapService';
+import { ZoomIn, ZoomOut, Maximize2, MousePointer2, Plus, Pencil, Trash2, Search, ListTree, Network, X } from 'lucide-react';
 
 /* ─── Palette ────────────────────────────────────────────────────── */
 const PALETTE = [
@@ -19,6 +19,15 @@ interface LayoutNode {
   x: number; y: number;
   base: string; light: string; text: string;
   parentId: string | null;
+}
+
+interface TreeItem {
+  id: string;
+  label: string;
+  depth: number;
+  parentId: string | null;
+  children: TreeItem[];
+  ancestors: string[];
 }
 
 /* ─── Geometry ───────────────────────────────────────────────────── */
@@ -218,6 +227,36 @@ function removeNode(data: MindMapData, id: string): MindMapData {
   };
 }
 
+function buildTree(data: MindMapData): TreeItem {
+  const makeItem = (id: string, label: string, depth: number, parentId: string | null, ancestors: string[], children: any[] = []): TreeItem => ({
+    id,
+    label,
+    depth,
+    parentId,
+    ancestors,
+    children: children.map((child, index) => {
+      const childId = depth === 0
+        ? `b${index}`
+        : depth === 1
+          ? `${id}c${index}`
+          : depth === 2
+            ? `${id}gc${index}`
+            : `${id}gg${index}`;
+      return makeItem(childId, child.label, depth + 1, id, [...ancestors, id], child.children || []);
+    }),
+  });
+
+  return makeItem('root', data.topic, 0, null, [], data.branches);
+}
+
+function flattenTree(item: TreeItem): TreeItem[] {
+  return [item, ...item.children.flatMap(flattenTree)];
+}
+
+const depthLabel = (depth: number) => ['الموضوع الرئيسي', 'فرع رئيسي', 'فرع فرعي', 'تفصيل', 'تفصيل إضافي'][Math.min(depth, 4)];
+
+const normalizeSearch = (value: string) => value.trim().toLowerCase();
+
 /* ═══ Component ══════════════════════════════════════════════════════ */
 interface Props { data: MindMapData; onDataChange?: (d: MindMapData) => void; height?: string; }
 
@@ -233,6 +272,8 @@ const MindMapCanvas: React.FC<Props> = ({ data, onDataChange, height = '680px' }
   const [editVal, setEditVal] = useState('');
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [delConfirm, setDelConfirm] = useState(false);
+  const [viewMode, setViewMode] = useState<'map' | 'outline'>('map');
+  const [searchTerm, setSearchTerm] = useState('');
   const drag = useRef<{ mode: 'canvas' | 'node'; nid?: string; lx: number; ly: number; moved: boolean } | null>(null);
 
   // Reset on new map (topic change)
@@ -247,6 +288,14 @@ const MindMapCanvas: React.FC<Props> = ({ data, onDataChange, height = '680px' }
 
   // All nodes (for hasChildren check & initial layout)
   const allBaseNodes = useMemo(() => computeLayout(data), [data]);
+  const tree = useMemo(() => buildTree(data), [data]);
+  const flatTree = useMemo(() => flattenTree(tree), [tree]);
+  const selectedInfo = useMemo(() => flatTree.find(item => item.id === selId) || null, [flatTree, selId]);
+  const normalizedQuery = normalizeSearch(searchTerm);
+  const matchingIds = useMemo(
+    () => new Set(normalizedQuery ? flatTree.filter(item => normalizeSearch(item.label).includes(normalizedQuery)).map(item => item.id) : []),
+    [flatTree, normalizedQuery]
+  );
 
   // Which nodes have children (in original data)
   const hasChildrenSet = useMemo(() => {
@@ -263,7 +312,7 @@ const MindMapCanvas: React.FC<Props> = ({ data, onDataChange, height = '680px' }
   }, [allBaseNodes]);
 
   // Visible nodes (filtered by collapsed)
-  const visibleBaseNodes = useMemo(() => filterVisible(allBaseNodes, collapsed), [allBaseNodes, collapsed]);
+  const visibleBaseNodes = useMemo(() => normalizedQuery ? allBaseNodes : filterVisible(allBaseNodes, collapsed), [allBaseNodes, collapsed, normalizedQuery]);
 
   const nodes = useMemo(() => visibleBaseNodes.map(n => ({
     ...n, x: n.x + (offsets[n.id]?.x ?? 0), y: n.y + (offsets[n.id]?.y ?? 0),
@@ -380,6 +429,53 @@ const MindMapCanvas: React.FC<Props> = ({ data, onDataChange, height = '680px' }
   const expandAll = () => setCollapsed(new Set());
   const collapseAll = () => setCollapsed(makeInitialCollapsed(data));
 
+  const revealNode = useCallback((id: string, switchToMap = true) => {
+    const item = flatTree.find(entry => entry.id === id);
+    if (item) {
+      setCollapsed(prev => {
+        const next = new Set(prev);
+        item.ancestors.forEach(ancestor => next.delete(ancestor));
+        return next;
+      });
+    }
+    setSelId(id);
+    setDelConfirm(false);
+    if (switchToMap) setViewMode('map');
+  }, [flatTree]);
+
+  const outlineItems = useMemo(() => {
+    const items = flatTree.filter(item => item.id !== 'root');
+    if (!normalizedQuery) return items;
+    return items.filter(item =>
+      normalizeSearch(item.label).includes(normalizedQuery) ||
+      item.children.some(child => normalizeSearch(child.label).includes(normalizedQuery))
+    );
+  }, [flatTree, normalizedQuery]);
+
+  const fitToScreen = useCallback(() => {
+    const targetNodes = nodes.length ? nodes : allBaseNodes;
+    if (targetNodes.length === 0) return;
+
+    const bounds = targetNodes.reduce((acc, node) => {
+      const { w, h } = nodeGeo(node.depth);
+      return {
+        minX: Math.min(acc.minX, node.x - w / 2),
+        maxX: Math.max(acc.maxX, node.x + w / 2),
+        minY: Math.min(acc.minY, node.y - h / 2),
+        maxY: Math.max(acc.maxY, node.y + h / 2),
+      };
+    }, { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
+
+    const mapWidth = Math.max(1, bounds.maxX - bounds.minX);
+    const mapHeight = Math.max(1, bounds.maxY - bounds.minY);
+    const nextScale = Math.max(0.18, Math.min(1.15, (cSize.w - 80) / mapWidth, (cSize.h - 120) / mapHeight));
+    const centerX = (bounds.minX + bounds.maxX) / 2;
+    const centerY = (bounds.minY + bounds.maxY) / 2;
+
+    setScale(nextScale);
+    setPan({ x: -centerX * nextScale, y: -centerY * nextScale });
+  }, [allBaseNodes, cSize.h, cSize.w, nodes]);
+
   const cx = cSize.w / 2, cy = cSize.h / 2;
   const selNode = selId ? nodes.find(n => n.id === selId) : null;
   const toolbarPos = selNode ? (() => {
@@ -394,7 +490,7 @@ const MindMapCanvas: React.FC<Props> = ({ data, onDataChange, height = '680px' }
       ref={containerRef}
       tabIndex={0}
       className="relative w-full overflow-hidden outline-none"
-      style={{ height, background: 'linear-gradient(145deg,#f0f4ff 0%,#f8fafc 50%,#f0faf5 100%)', cursor: drag.current?.mode === 'canvas' ? 'grabbing' : 'grab' }}
+      style={{ height, background: 'linear-gradient(145deg,#f0f4ff 0%,#f8fafc 50%,#f0faf5 100%)', cursor: viewMode === 'map' ? (drag.current?.mode === 'canvas' ? 'grabbing' : 'grab') : 'default' }}
       onMouseDown={onContainerMD} onMouseMove={onMM} onMouseUp={onMU}
       onMouseLeave={onMU} onClick={onContainerClick} onKeyDown={onKey}
     >
@@ -403,7 +499,7 @@ const MindMapCanvas: React.FC<Props> = ({ data, onDataChange, height = '680px' }
         {([
           [ZoomIn, () => setScale(s => Math.min(3, s + 0.12))],
           [ZoomOut, () => setScale(s => Math.max(0.15, s - 0.12))],
-          [Maximize2, () => { setScale(0.68); setPan({ x: 0, y: 0 }); setOffsets({}); }],
+          [Maximize2, fitToScreen],
         ] as const).map(([Icon, fn], i) => (
           <button key={i} onClick={fn as () => void}
             className="p-2 bg-white/95 rounded-lg shadow-sm border border-slate-200 hover:bg-indigo-50 text-slate-500 hover:text-indigo-600 transition-all"
@@ -411,14 +507,61 @@ const MindMapCanvas: React.FC<Props> = ({ data, onDataChange, height = '680px' }
         ))}
       </div>
 
-      {/* Expand / Collapse all buttons */}
-      <div className="absolute top-3 left-3 z-20 flex gap-1.5">
-        <button onClick={expandAll}
-          className="px-3 py-1.5 text-xs font-semibold bg-white/95 rounded-lg shadow-sm border border-slate-200 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 transition-all"
-        >Expand All</button>
-        <button onClick={collapseAll}
-          className="px-3 py-1.5 text-xs font-semibold bg-white/95 rounded-lg shadow-sm border border-slate-200 hover:bg-slate-100 text-slate-600 transition-all"
-        >Collapse All</button>
+      {/* Reading and navigation controls */}
+      <div
+        className="absolute top-3 left-3 z-20 flex max-w-[calc(100%-78px)] flex-wrap items-center gap-2"
+        onMouseDown={e => e.stopPropagation()}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="relative w-44 sm:w-60">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            value={searchTerm}
+            onChange={event => setSearchTerm(event.target.value)}
+            placeholder="بحث داخل الخريطة"
+            className="h-9 w-full rounded-xl border border-slate-200 bg-white/95 pl-9 pr-8 text-sm text-slate-700 shadow-sm outline-none transition-all placeholder:text-slate-400 focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
+          />
+          {searchTerm && (
+            <button
+              type="button"
+              onClick={() => setSearchTerm('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              aria-label="مسح البحث"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+
+        <div className="flex rounded-xl border border-slate-200 bg-white/95 p-1 shadow-sm">
+          <button
+            type="button"
+            onClick={() => setViewMode('map')}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-bold transition-colors ${viewMode === 'map' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+          >
+            <Network className="h-3.5 w-3.5" />
+            خريطة
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode('outline')}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-bold transition-colors ${viewMode === 'outline' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+          >
+            <ListTree className="h-3.5 w-3.5" />
+            قراءة
+          </button>
+        </div>
+
+        {viewMode === 'map' && (
+          <div className="flex gap-1.5">
+            <button onClick={expandAll}
+              className="px-3 py-1.5 text-xs font-semibold bg-white/95 rounded-lg shadow-sm border border-slate-200 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 transition-all"
+            >فتح الكل</button>
+            <button onClick={collapseAll}
+              className="px-3 py-1.5 text-xs font-semibold bg-white/95 rounded-lg shadow-sm border border-slate-200 hover:bg-slate-100 text-slate-600 transition-all"
+            >طي الكل</button>
+          </div>
+        )}
       </div>
 
       {/* Node toolbar */}
@@ -429,31 +572,141 @@ const MindMapCanvas: React.FC<Props> = ({ data, onDataChange, height = '680px' }
           onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
         >
           <button onClick={doEdit} className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
-            <Pencil className="w-3.5 h-3.5" /> Edit
+            <Pencil className="w-3.5 h-3.5" /> تعديل
           </button>
           <div className="w-px h-5 bg-slate-200" />
           <button onClick={doAdd} className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
-            <Plus className="w-3.5 h-3.5" /> Add
+            <Plus className="w-3.5 h-3.5" /> إضافة
           </button>
           {selId !== 'root' && <>
             <div className="w-px h-5 bg-slate-200" />
             <button onClick={doDel} className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-all ${delConfirm ? 'bg-red-500 text-white' : 'text-red-500 hover:bg-red-50'}`}>
-              <Trash2 className="w-3.5 h-3.5" /> {delConfirm ? 'Sure?' : 'Delete'}
+              <Trash2 className="w-3.5 h-3.5" /> {delConfirm ? 'تأكيد؟' : 'حذف'}
             </button>
           </>}
         </div>
       )}
 
-      {/* Bottom hints */}
-      <div className="absolute bottom-3 left-3 z-10 flex items-center gap-1.5 text-xs text-slate-400 bg-white/85 backdrop-blur-sm px-3 py-1.5 rounded-xl border border-white/60 pointer-events-none select-none shadow-sm">
-        <MousePointer2 className="w-3 h-3" /> Click to expand · Double-click to edit · Drag to move
-      </div>
-      <div className="absolute bottom-3 right-3 z-10 text-xs font-mono text-slate-400 bg-white/85 backdrop-blur-sm px-2.5 py-1.5 rounded-xl border border-white/60 pointer-events-none shadow-sm">
-        {Math.round(scale * 100)}%
-      </div>
+      {viewMode === 'map' && (
+        <>
+          <div className="absolute bottom-3 left-3 z-10 flex items-center gap-1.5 text-xs text-slate-400 bg-white/85 backdrop-blur-sm px-3 py-1.5 rounded-xl border border-white/60 pointer-events-none select-none shadow-sm">
+            <MousePointer2 className="w-3 h-3" /> اضغط للفتح · اضغط مرتين للتعديل · اسحب للتحريك
+          </div>
+          <div className="absolute bottom-3 right-3 z-10 text-xs font-mono text-slate-400 bg-white/85 backdrop-blur-sm px-2.5 py-1.5 rounded-xl border border-white/60 pointer-events-none shadow-sm">
+            {Math.round(scale * 100)}%
+          </div>
+        </>
+      )}
+
+      {viewMode === 'outline' && (
+        <div
+          className="absolute inset-x-3 bottom-3 top-20 z-10 overflow-hidden rounded-2xl border border-slate-200 bg-white/95 shadow-xl backdrop-blur-sm"
+          onMouseDown={e => e.stopPropagation()}
+          onClick={e => e.stopPropagation()}
+        >
+          <div className="border-b border-slate-200 px-4 py-3">
+            <h3 className="text-sm font-bold text-slate-900">عرض القراءة</h3>
+            <p className="text-xs text-slate-500">اقرأ محتوى الخريطة كقائمة منظمة، واضغط على أي عنصر لعرضه في الخريطة.</p>
+          </div>
+          <div className="h-[calc(100%-64px)] overflow-y-auto p-3">
+            {outlineItems.length === 0 ? (
+              <p className="rounded-xl bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">لا توجد نتائج مطابقة.</p>
+            ) : (
+              <div className="space-y-1">
+                {outlineItems.map(item => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => revealNode(item.id)}
+                    className={`flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-start transition-colors ${selId === item.id ? 'bg-indigo-50 text-indigo-700' : 'text-slate-700 hover:bg-slate-50'}`}
+                    style={{ paddingInlineStart: `${12 + item.depth * 18}px` }}
+                  >
+                    <span className="min-w-0 truncate" dir="auto">{item.label}</span>
+                    <span className="flex-shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">
+                      {item.children.length ? `${item.children.length}` : depthLabel(item.depth)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {viewMode === 'map' && selectedInfo && !editId && (
+        <aside
+          className="absolute bottom-16 right-3 top-20 z-20 w-[min(340px,calc(100%-24px))] overflow-hidden rounded-2xl border border-slate-200 bg-white/95 shadow-xl backdrop-blur-sm"
+          onMouseDown={e => e.stopPropagation()}
+          onClick={e => e.stopPropagation()}
+        >
+          <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
+            <div className="min-w-0">
+              <p className="text-xs font-bold text-indigo-600">{depthLabel(selectedInfo.depth)}</p>
+              <h3 className="mt-1 line-clamp-2 text-base font-bold text-slate-900" dir="auto">{selectedInfo.label}</h3>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSelId(null)}
+              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              aria-label="إغلاق التفاصيل"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="max-h-[calc(100%-64px)] overflow-y-auto p-4">
+            <div className="mb-4 flex flex-wrap gap-1.5">
+              {selectedInfo.ancestors.map(ancestorId => {
+                const ancestor = flatTree.find(item => item.id === ancestorId);
+                if (!ancestor) return null;
+                return (
+                  <button
+                    key={ancestorId}
+                    type="button"
+                    onClick={() => revealNode(ancestorId)}
+                    className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:bg-indigo-50 hover:text-indigo-700"
+                    dir="auto"
+                  >
+                    {ancestor.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mb-4 grid grid-cols-2 gap-2">
+              <button onClick={doEdit} className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">
+                <Pencil className="h-3.5 w-3.5" /> تعديل
+              </button>
+              <button onClick={doAdd} className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-bold text-indigo-700 hover:bg-indigo-100">
+                <Plus className="h-3.5 w-3.5" /> إضافة
+              </button>
+            </div>
+
+            <div>
+              <h4 className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-400">العناصر التابعة</h4>
+              {selectedInfo.children.length ? (
+                <div className="space-y-2">
+                  {selectedInfo.children.map(child => (
+                    <button
+                      key={child.id}
+                      type="button"
+                      onClick={() => revealNode(child.id)}
+                      className="flex w-full items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2 text-start text-sm text-slate-700 hover:bg-indigo-50 hover:text-indigo-700"
+                    >
+                      <span className="min-w-0 truncate" dir="auto">{child.label}</span>
+                      <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-400">{child.children.length}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="rounded-xl bg-slate-50 px-3 py-3 text-sm text-slate-500">لا توجد عناصر تابعة لهذه العقدة.</p>
+              )}
+            </div>
+          </div>
+        </aside>
+      )}
 
       {/* SVG */}
-      <svg width="100%" height="100%" style={{ display: 'block' }}>
+      {viewMode === 'map' && <svg width="100%" height="100%" style={{ display: 'block' }}>
         <defs>
           <pattern id="grid" width="30" height="30" patternUnits="userSpaceOnUse">
             <circle cx="15" cy="15" r="0.9" fill="#94a3b8" opacity="0.22" />
@@ -506,6 +759,8 @@ const MindMapCanvas: React.FC<Props> = ({ data, onDataChange, height = '680px' }
             const isCollapsed = collapsed.has(n.id);
             const hasKids = hasChildrenSet.has(n.id);
             const kCount = childCount.get(n.id) ?? 0;
+            const isMatch = matchingIds.has(n.id);
+            const dimmedBySearch = Boolean(normalizedQuery) && !isMatch;
             const fs = nodeFSize(n.depth);
             const palIdx = PALETTE.findIndex(p => p.base === n.base);
             const filterAttr = isRoot ? 'url(#rglow)' : isBranch && palIdx >= 0 ? `url(#pg${palIdx})` : isSel ? 'url(#sglow)' : undefined;
@@ -527,7 +782,22 @@ const MindMapCanvas: React.FC<Props> = ({ data, onDataChange, height = '680px' }
                 onClick={e => onNodeClick(e, n.id)}
                 onDoubleClick={e => onNodeDbl(e, n)}
                 style={{ cursor: 'pointer' }}
+                opacity={dimmedBySearch ? 0.36 : 1}
               >
+                {isMatch && (
+                  <rect
+                    x={-w / 2 - 7}
+                    y={-h / 2 - 7}
+                    width={w + 14}
+                    height={h + 14}
+                    rx={rx + 7}
+                    fill="none"
+                    stroke="#f59e0b"
+                    strokeWidth={3}
+                    strokeDasharray="7 4"
+                  />
+                )}
+
                 {/* ROOT */}
                 {isRoot && <>
                   <rect x={-w/2-4} y={-h/2-4} width={w+8} height={h+8} rx={rx+4}
@@ -663,7 +933,7 @@ const MindMapCanvas: React.FC<Props> = ({ data, onDataChange, height = '680px' }
             );
           })}
         </g>
-      </svg>
+      </svg>}
     </div>
   );
 };

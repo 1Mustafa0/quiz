@@ -1,18 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import { db } from '../firebase';
 import { deleteDoc, doc, updateDoc, Timestamp } from 'firebase/firestore';
-import { Users, BookOpen, Trash2, Shield, ShieldAlert, Search, Mail, TrendingUp, UserPlus, Eye, UserCheck, RefreshCw, Globe, Crown } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { Users, BookOpen, Trash2, Shield, ShieldAlert, Search, Mail, TrendingUp, UserPlus, Eye, UserCheck, RefreshCw, Globe, X, Clock, Check } from 'lucide-react';
+import { motion, AnimatePresence, type Variants } from 'motion/react';
 import { useAuth } from '../AuthContext';
 import { Navigate, Link } from 'react-router-dom';
 import ConfirmModal from '../components/ConfirmModal';
+import { getCategoryTone, normalizeCategory } from '../utils/categories';
 
 interface UserProfile {
   uid: string;
   email: string;
   displayName: string;
   role: string;
-  plan?: 'free' | 'pro';
   createdAt?: any;
 }
 
@@ -26,8 +26,8 @@ interface Quiz {
 
 interface VisitorDoc {
   sessionId: string;
-  firstVisit: number | Timestamp;
-  lastVisit: number | Timestamp;
+  firstVisit: number | Timestamp | null;
+  lastVisit: number | Timestamp | null;
   visitCount: number;
   isRegistered: boolean;
   uid?: string;
@@ -75,6 +75,32 @@ function timeAgo(ts: Timestamp | number | null | undefined): string {
   return `${Math.floor(diff / 86400)} يوم`;
 }
 
+function safeText(value: unknown, fallback = ''): string {
+  const text = value == null ? '' : String(value).trim();
+  return text || fallback;
+}
+
+function safeLower(value: unknown): string {
+  return safeText(value).toLowerCase();
+}
+
+function shortId(value: unknown, length = 12): string {
+  const text = safeText(value, 'unknown');
+  return text.length > length ? `${text.slice(0, length)}...` : text;
+}
+
+function firstInitial(...values: unknown[]): string {
+  const text = values.map((value) => safeText(value)).find(Boolean) || '?';
+  return text.charAt(0).toUpperCase();
+}
+
+const smoothEase = [0.22, 1, 0.36, 1] as const;
+
+const fadeUp: Variants = {
+  hidden: { opacity: 0, y: 8 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.18, ease: smoothEase } },
+};
+
 const AdminDashboard: React.FC = () => {
   const { user, role, loading: authLoading } = useAuth();
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -91,6 +117,9 @@ const AdminDashboard: React.FC = () => {
   const [newEmail, setNewEmail] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
   const [visitorsError, setVisitorsError] = useState<string | null>(null);
+  const [adminError, setAdminError] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [confirmConfig, setConfirmConfig] = useState<{
     isOpen: boolean; title: string; message: string;
     onConfirm: () => void; type: 'danger' | 'info' | 'warning';
@@ -98,7 +127,11 @@ const AdminDashboard: React.FC = () => {
 
   const getIdToken = React.useCallback(async () => {
     if (!user) return null;
-    try { return await user.getIdToken(); } catch { return null; }
+    try { return await user.getIdToken(); } catch (e) {
+      console.error('[admin] getIdToken error:', e);
+      setAdminError('تعذر تأكيد جلسة الأدمن. أعد تسجيل الدخول ثم حاول مرة أخرى.');
+      return null;
+    }
   }, [user]);
 
   const fetchUsers = React.useCallback(async () => {
@@ -106,14 +139,17 @@ const AdminDashboard: React.FC = () => {
     if (!idToken) return;
     try {
       const res = await fetch('/api/admin/users', { headers: { Authorization: `Bearer ${idToken}` } });
-      if (!res.ok) return;
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Users request failed (${res.status})`);
+      }
       const data = await res.json();
-      const list: UserProfile[] = (data.users || []).map((u: any) => ({
-        uid: u.uid,
-        email: u.email || '',
-        displayName: u.displayName || '',
-        role: u.role || 'user',
-        plan: u.plan || 'free',
+      const rawUsers = Array.isArray(data.users) ? data.users : [];
+      const list: UserProfile[] = rawUsers.map((u: any, index: number) => ({
+        uid: safeText(u.uid || u.id || u.localId, `unknown-user-${index}`),
+        email: safeText(u.email),
+        displayName: safeText(u.displayName || u.name),
+        role: safeText(u.role, 'user'),
         createdAt: u.createdAt || null,
       }));
       setUsers(list);
@@ -132,8 +168,10 @@ const AdminDashboard: React.FC = () => {
         newUsersToday: list.filter(u => toMs2(u.createdAt) >= todayMs).length,
         newUsersWeek:  list.filter(u => toMs2(u.createdAt) >= weekMs).length,
       }));
+      setAdminError(null);
     } catch (e: any) {
       console.error('[admin] fetchUsers error:', e.message);
+      setAdminError('تعذر تحميل بيانات المستخدمين.');
     }
   }, [getIdToken]);
 
@@ -143,15 +181,23 @@ const AdminDashboard: React.FC = () => {
     try {
       const res = await fetch('/api/admin/quizzes', { headers: { Authorization: `Bearer ${idToken}` } });
       if (!res.ok) {
-        // Fallback: try direct Firestore onSnapshot (might work if rules are deployed)
-        return;
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Quizzes request failed (${res.status})`);
       }
       const data = await res.json();
-      setQuizzes(data.quizzes || []);
+      const rawQuizzes = Array.isArray(data.quizzes) ? data.quizzes : [];
+      const qList: Quiz[] = rawQuizzes.map((q: any, index: number) => ({
+        id: safeText(q.id || q.docId, `quiz-${index}`),
+        title: safeText(q.title, 'Untitled quiz'),
+        authorUid: safeText(q.authorUid || q.uid || q.ownerUid),
+        category: safeText(q.category),
+        createdAt: q.createdAt || null,
+      }));
+      setQuizzes(qList);
+      setAdminError(null);
     } catch (e: any) {
       console.error('[admin] fetchQuizzes error:', e.message);
-    } finally {
-      setLoading(false);
+      setAdminError('تعذر تحميل بيانات الكويزات.');
     }
   }, [getIdToken]);
 
@@ -166,7 +212,18 @@ const AdminDashboard: React.FC = () => {
         return;
       }
       const data = await res.json();
-      const vList: VisitorDoc[] = data.visitors || [];
+      const rawVisitors = Array.isArray(data.visitors) ? data.visitors : [];
+      const vList: VisitorDoc[] = rawVisitors.map((v: any, index: number) => {
+        const uid = safeText(v.uid);
+        return {
+          sessionId: safeText(v.sessionId || v.id, `visitor-${index}`),
+          firstVisit: v.firstVisit ?? null,
+          lastVisit: v.lastVisit ?? v.firstVisit ?? null,
+          visitCount: Number(v.visitCount || 0),
+          isRegistered: Boolean(v.isRegistered || uid),
+          ...(uid ? { uid } : {}),
+        };
+      });
       setVisitors(vList);
       setVisitorsError(null);
       const todayMs = startOfDay().seconds * 1000;
@@ -178,30 +235,85 @@ const AdminDashboard: React.FC = () => {
         registeredVisitors: vList.filter(v => v.isRegistered).length,
       }));
     } catch (e: any) {
+      console.error('[admin] fetchVisitors error:', e.message);
       setVisitorsError(e.message);
     }
   }, [getIdToken]);
 
   useEffect(() => {
     if (role !== 'admin') return;
+    let isMounted = true;
 
     // Initial fetch for all three data sources
-    fetchUsers();
-    fetchQuizzes();
-    fetchVisitors();
+    const loadAll = async () => {
+      setLoading(true);
+      await Promise.all([fetchUsers(), fetchQuizzes(), fetchVisitors()]);
+      if (isMounted) {
+        setLastUpdated(new Date());
+        setLoading(false);
+      }
+    };
+    loadAll();
 
     // Poll every 30s
     const interval = setInterval(() => {
-      fetchUsers();
-      fetchQuizzes();
-      fetchVisitors();
+      Promise.all([fetchUsers(), fetchQuizzes(), fetchVisitors()]).then(() => {
+        if (isMounted) setLastUpdated(new Date());
+      });
     }, 30000);
 
-    return () => clearInterval(interval);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
   }, [role, fetchUsers, fetchQuizzes, fetchVisitors]);
 
-  if (authLoading) return null;
+  if (authLoading) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <div className="flex flex-col items-center gap-4 rounded-2xl border border-gray-100 bg-white px-8 py-7 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+          <div className="h-12 w-12 animate-spin rounded-full border-4 border-indigo-100 border-t-indigo-600 dark:border-indigo-900/50 dark:border-t-indigo-400" />
+          <p className="text-sm font-medium text-gray-600 dark:text-slate-300">Loading admin dashboard...</p>
+        </div>
+      </div>
+    );
+  }
   if (role !== 'admin') return <Navigate to="/" />;
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between gap-4">
+          <div className="space-y-3">
+            <div className="h-8 w-56 animate-pulse rounded-lg bg-gray-200 dark:bg-slate-700" />
+            <div className="h-4 w-80 max-w-full animate-pulse rounded bg-gray-100 dark:bg-slate-800" />
+          </div>
+          <div className="h-10 w-36 animate-pulse rounded-xl bg-gray-100 dark:bg-slate-800" />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
+          {Array.from({ length: 6 }).map((_, index) => (
+            <motion.div
+              key={index}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: index * 0.02, duration: 0.16 }}
+              className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800"
+            >
+              <div className="mb-4 h-10 w-10 animate-pulse rounded-xl bg-gray-100 dark:bg-slate-700" />
+              <div className="mb-2 h-7 w-14 animate-pulse rounded bg-gray-200 dark:bg-slate-700" />
+              <div className="h-3 w-24 animate-pulse rounded bg-gray-100 dark:bg-slate-700" />
+            </motion.div>
+          ))}
+        </div>
+        <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+          <div className="space-y-3">
+            {Array.from({ length: 5 }).map((_, index) => (
+              <div key={index} className="h-12 animate-pulse rounded-xl bg-gray-50 dark:bg-slate-700/60" />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const handleDeleteQuiz = (quizId: string) => {
     setConfirmConfig({
@@ -209,8 +321,14 @@ const AdminDashboard: React.FC = () => {
       message: 'هل أنت متأكد من حذف هذا الكويز؟ لا يمكن التراجع عن هذا الإجراء.',
       type: 'danger',
       onConfirm: async () => {
-        try { await deleteDoc(doc(db, 'quizzes', quizId)); }
-        catch (error) { handleFirestoreError(error, OperationType.DELETE, `quizzes/${quizId}`); }
+        try {
+          await deleteDoc(doc(db, 'quizzes', quizId));
+          setQuizzes(prev => prev.filter(q => q.id !== quizId));
+          setAdminError(null);
+        } catch (error) {
+          console.error('[admin] delete quiz error:', error);
+          setAdminError('تعذر حذف الكويز. تأكد من صلاحيات الأدمن ثم حاول مرة أخرى.');
+        }
       }
     });
   };
@@ -222,32 +340,13 @@ const AdminDashboard: React.FC = () => {
       message: `هل تريد تغيير رتبة المستخدم إلى ${newRole === 'admin' ? 'أدمن' : 'مستخدم'}؟`,
       type: 'warning',
       onConfirm: async () => {
-        try { await updateDoc(doc(db, 'users', userId), { role: newRole }); }
-        catch (error) { handleFirestoreError(error, OperationType.UPDATE, `users/${userId}`); }
-      }
-    });
-  };
-
-  const toggleUserPlan = async (userId: string, currentPlan: 'free' | 'pro' = 'free') => {
-    const newPlan = currentPlan === 'pro' ? 'free' : 'pro';
-    setConfirmConfig({
-      isOpen: true, title: `ترقية إلى ${newPlan === 'pro' ? 'Pro' : 'مجاني'}؟`,
-      message: `هل تريد تغيير خطة هذا المستخدم إلى ${newPlan === 'pro' ? 'Pro (مدفوع)' : 'المجانية'}؟`,
-      type: newPlan === 'pro' ? 'info' : 'warning',
-      onConfirm: async () => {
-        const idToken = await getIdToken();
-        if (!idToken) return;
         try {
-          const res = await fetch('/api/user/set-plan', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-            body: JSON.stringify({ uid: userId, plan: newPlan }),
-          });
-          if (res.ok) {
-            setUsers(prev => prev.map(u => u.uid === userId ? { ...u, plan: newPlan } : u));
-          }
-        } catch (e: any) {
-          console.error('[admin] toggleUserPlan error:', e.message);
+          await updateDoc(doc(db, 'users', userId), { role: newRole });
+          setUsers(prev => prev.map(u => u.uid === userId ? { ...u, role: newRole } : u));
+          setAdminError(null);
+        } catch (error) {
+          console.error('[admin] update role error:', error);
+          setAdminError('تعذر تغيير رتبة المستخدم. تأكد من صلاحيات الأدمن ثم حاول مرة أخرى.');
         }
       }
     });
@@ -262,29 +361,52 @@ const AdminDashboard: React.FC = () => {
     setIsUpdating(true);
     try {
       await updateDoc(doc(db, 'users', editingUser.uid), { email: newEmail });
+      setUsers(prev => prev.map(u => u.uid === editingUser.uid ? { ...u, email: newEmail } : u));
       setEditingUser(null); setNewEmail('');
-    } catch (error) { handleFirestoreError(error, OperationType.UPDATE, `users/${editingUser.uid}`); }
+      setAdminError(null);
+    } catch (error) {
+      console.error('[admin] update email error:', error);
+      setAdminError('تعذر تحديث البريد الإلكتروني. تأكد من صلاحيات الأدمن ثم حاول مرة أخرى.');
+    }
     finally { setIsUpdating(false); }
   };
 
+  const query = searchTerm.trim().toLowerCase();
+
   const filteredUsers = users.filter(u =>
-    u.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    u.displayName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    u.uid?.toLowerCase().includes(searchTerm.toLowerCase())
+    safeLower(u.email).includes(query) ||
+    safeLower(u.displayName).includes(query) ||
+    safeLower(u.uid).includes(query)
   );
 
   const filteredQuizzes = quizzes.filter(q =>
-    q.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    q.category?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    q.authorUid?.toLowerCase().includes(searchTerm.toLowerCase())
+    safeLower(q.title).includes(query) ||
+    safeLower(normalizeCategory(q.category)).includes(query) ||
+    safeLower(q.authorUid).includes(query)
   );
 
   const filteredVisitors = visitors
     .filter(v =>
-      v.sessionId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      v.uid?.toLowerCase().includes(searchTerm.toLowerCase())
+      safeLower(v.sessionId).includes(query) ||
+      safeLower(v.uid).includes(query)
     )
     .sort((a, b) => (toMs(b.lastVisit) || 0) - (toMs(a.lastVisit) || 0));
+
+  const renderQuizCategory = (category: string, compact = false) => {
+    const normalized = normalizeCategory(category);
+    if (!normalized) {
+      return <span className="text-gray-400 dark:text-slate-500">—</span>;
+    }
+
+    return (
+      <span
+        className={`inline-flex rounded-full px-2 py-0.5 font-semibold ${compact ? 'text-[10px]' : 'text-xs'} ${getCategoryTone(normalized)}`}
+        dir="auto"
+      >
+        {normalized}
+      </span>
+    );
+  };
 
   const statCards = [
     { label: 'إجمالي المستخدمين', value: stats.totalUsers, icon: Users, color: 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400', border: 'border-indigo-100 dark:border-indigo-800' },
@@ -301,45 +423,65 @@ const AdminDashboard: React.FC = () => {
     { key: 'visitors' as const, label: `الزوار`, count: visitors.length, icon: Eye },
   ];
 
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const handleRefreshAll = async () => {
     setIsRefreshing(true);
-    await Promise.all([fetchUsers(), fetchQuizzes(), fetchVisitors()]);
-    setIsRefreshing(false);
+    try {
+      await Promise.all([fetchUsers(), fetchQuizzes(), fetchVisitors()]);
+      setLastUpdated(new Date());
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <motion.div variants={fadeUp} className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Admin Dashboard</h1>
-          <p className="text-gray-600 dark:text-slate-400 flex items-center gap-2">
+          <p className="text-gray-600 dark:text-slate-400 flex flex-wrap items-center gap-2">
             Manage users and content across the platform.
             <span className="inline-flex items-center gap-1 text-xs text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/30 px-2 py-0.5 rounded-full">
               <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
               مباشر
             </span>
+            {lastUpdated && (
+              <span className="hidden text-xs text-gray-400 dark:text-slate-500 sm:inline">
+                آخر تحديث {lastUpdated.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            )}
           </p>
         </div>
-        <button
+        <motion.button
           onClick={handleRefreshAll}
           disabled={isRefreshing}
+          whileHover={{ y: -1 }}
+          whileTap={{ scale: 0.98 }}
           className="inline-flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-xl text-sm font-medium text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors shadow-sm disabled:opacity-50"
         >
           <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
           تحديث البيانات
-        </button>
-      </div>
+        </motion.button>
+      </motion.div>
+
+      {adminError && (
+        <motion.div
+          variants={fadeUp}
+          className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-700 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300"
+        >
+          {adminError}
+        </motion.div>
+      )}
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      <motion.div variants={fadeUp} className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {statCards.map((card, i) => (
           <motion.div
             key={card.label}
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.06 }}
-            className={`bg-white dark:bg-slate-800 rounded-2xl border ${card.border} shadow-sm p-4 space-y-3`}
+            whileHover={{ y: -2 }}
+            transition={{ delay: i * 0.02, duration: 0.16 }}
+            className={`bg-white dark:bg-slate-800 rounded-2xl border ${card.border} shadow-sm hover:shadow-md p-4 space-y-3 transition-shadow`}
           >
             <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${card.color}`}>
               <card.icon className="w-5 h-5" />
@@ -350,14 +492,15 @@ const AdminDashboard: React.FC = () => {
             </div>
           </motion.div>
         ))}
-      </div>
+      </motion.div>
 
       {/* Tabs */}
-      <div className="flex space-x-1 border-b border-gray-200 dark:border-slate-700">
+      <motion.div variants={fadeUp} className="flex flex-wrap gap-1 border-b border-gray-200 dark:border-slate-700 overflow-x-auto">
         {tabs.map(tab => (
-          <button
+          <motion.button
             key={tab.key}
             onClick={() => { setActiveTab(tab.key); setSearchTerm(''); }}
+            whileTap={{ scale: 0.98 }}
             className={`pb-4 px-4 text-sm font-medium transition-colors relative flex items-center gap-2 ${
               activeTab === tab.key
                 ? 'text-indigo-600 dark:text-indigo-400'
@@ -369,12 +512,12 @@ const AdminDashboard: React.FC = () => {
             {activeTab === tab.key && (
               <motion.div layoutId="tab-underline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600 dark:bg-indigo-400" />
             )}
-          </button>
+          </motion.button>
         ))}
-      </div>
+      </motion.div>
 
       {/* Search */}
-      <div className="relative">
+      <motion.div variants={fadeUp} className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-slate-500" />
         <input
           type="text"
@@ -383,9 +526,9 @@ const AdminDashboard: React.FC = () => {
           onChange={(e) => setSearchTerm(e.target.value)}
           className="w-full pl-10 pr-4 py-3 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all shadow-sm text-gray-900 dark:text-white"
         />
-      </div>
+      </motion.div>
 
-      <div className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-100 dark:border-slate-700 shadow-sm overflow-hidden">
+      <motion.div variants={fadeUp} className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-100 dark:border-slate-700 shadow-sm overflow-hidden">
         <AnimatePresence mode="wait">
 
           {/* ── USERS TAB ── */}
@@ -398,25 +541,24 @@ const AdminDashboard: React.FC = () => {
                       <th className="px-6 py-4 text-sm font-semibold text-gray-900 dark:text-white">User</th>
                       <th className="px-6 py-4 text-sm font-semibold text-gray-900 dark:text-white">Email</th>
                       <th className="px-6 py-4 text-sm font-semibold text-gray-900 dark:text-white">Role</th>
-                      <th className="px-6 py-4 text-sm font-semibold text-gray-900 dark:text-white">Plan</th>
                       <th className="px-6 py-4 text-sm font-semibold text-gray-900 dark:text-white">Joined</th>
                       <th className="px-6 py-4 text-sm font-semibold text-gray-900 dark:text-white text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100 dark:divide-slate-700">
                     {filteredUsers.length === 0 && (
-                      <tr><td colSpan={6} className="px-6 py-12 text-center text-gray-400 dark:text-slate-500">لا يوجد مستخدمون</td></tr>
+                      <tr><td colSpan={5} className="px-6 py-12 text-center text-gray-400 dark:text-slate-500">لا يوجد مستخدمون</td></tr>
                     )}
                     {filteredUsers.map((u) => (
                       <tr key={u.uid} className="hover:bg-gray-50 dark:hover:bg-slate-700/30 transition-colors">
                         <td className="px-6 py-4">
                           <div className="flex items-center space-x-3">
                             <div className="w-10 h-10 rounded-full bg-indigo-100 dark:bg-indigo-900/40 flex items-center justify-center text-indigo-600 dark:text-indigo-400 font-bold">
-                              {(u.displayName || u.email || '?')[0].toUpperCase()}
+                              {firstInitial(u.displayName, u.email, u.uid)}
                             </div>
                             <div>
                               <div className="font-medium text-gray-900 dark:text-white">{u.displayName || 'Anonymous'}</div>
-                              <div className="text-xs text-gray-400 dark:text-slate-500 font-mono">{u.uid.slice(0, 12)}…</div>
+                              <div className="text-xs text-gray-400 dark:text-slate-500 font-mono">{shortId(u.uid, 12)}</div>
                             </div>
                           </div>
                         </td>
@@ -432,16 +574,6 @@ const AdminDashboard: React.FC = () => {
                           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${u.role === 'admin' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-800 dark:text-purple-300' : 'bg-gray-100 dark:bg-slate-700 text-gray-800 dark:text-slate-300'}`}>
                             {u.role}
                           </span>
-                        </td>
-                        <td className="px-6 py-4">
-                          <button
-                            onClick={() => toggleUserPlan(u.uid, u.plan)}
-                            title={`الخطة الحالية: ${u.plan === 'pro' ? 'Pro' : 'مجاني'} — انقر للتبديل`}
-                            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold transition-colors ${u.plan === 'pro' ? 'bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300 hover:bg-violet-200' : 'bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-400 hover:bg-gray-200'}`}
-                          >
-                            {u.plan === 'pro' && <Crown className="w-3 h-3" />}
-                            {u.plan === 'pro' ? 'Pro' : 'مجاني'}
-                          </button>
                         </td>
                         <td className="px-6 py-4 text-sm text-gray-500 dark:text-slate-400">
                           {u.createdAt ? (() => {
@@ -470,11 +602,11 @@ const AdminDashboard: React.FC = () => {
                   <div key={u.uid} className="p-4 space-y-3">
                     <div className="flex items-center space-x-3">
                       <div className="w-10 h-10 rounded-full bg-indigo-100 dark:bg-indigo-900/40 flex items-center justify-center text-indigo-600 dark:text-indigo-400 font-bold">
-                        {(u.displayName || u.email || '?')[0].toUpperCase()}
+                        {firstInitial(u.displayName, u.email, u.uid)}
                       </div>
                       <div>
                         <div className="font-medium text-gray-900 dark:text-white">{u.displayName || 'Anonymous'}</div>
-                        <div className="text-xs text-gray-400 dark:text-slate-500 font-mono">{u.uid.slice(0, 16)}…</div>
+                        <div className="text-xs text-gray-400 dark:text-slate-500 font-mono">{shortId(u.uid, 16)}</div>
                       </div>
                     </div>
                     <div className="flex items-center justify-between">
@@ -483,13 +615,6 @@ const AdminDashboard: React.FC = () => {
                         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-medium ${u.role === 'admin' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-800 dark:text-purple-300' : 'bg-gray-100 dark:bg-slate-700 text-gray-800 dark:text-slate-300'}`}>
                           {u.role}
                         </span>
-                        <button
-                          onClick={() => toggleUserPlan(u.uid, u.plan)}
-                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold ${u.plan === 'pro' ? 'bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300' : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400'}`}
-                        >
-                          {u.plan === 'pro' && <Crown className="w-2.5 h-2.5" />}
-                          {u.plan === 'pro' ? 'Pro' : 'مجاني'}
-                        </button>
                       </div>
                     </div>
                     <div className="flex items-center justify-end space-x-4 pt-1">
@@ -527,8 +652,8 @@ const AdminDashboard: React.FC = () => {
                     {filteredQuizzes.map((q) => (
                       <tr key={q.id} className="hover:bg-gray-50 dark:hover:bg-slate-700/30 transition-colors">
                         <td className="px-6 py-4 font-medium text-gray-900 dark:text-white">{q.title}</td>
-                        <td className="px-6 py-4 text-gray-600 dark:text-slate-300">{q.category || 'General'}</td>
-                        <td className="px-6 py-4 text-xs text-gray-500 dark:text-slate-400 font-mono">{q.authorUid?.slice(0, 16)}…</td>
+                        <td className="px-6 py-4">{renderQuizCategory(q.category)}</td>
+                        <td className="px-6 py-4 text-xs text-gray-500 dark:text-slate-400 font-mono">{shortId(q.authorUid, 16)}</td>
                         <td className="px-6 py-4 text-right">
                           <button onClick={() => handleDeleteQuiz(q.id)} className="p-2 text-gray-400 hover:text-red-600 transition-colors" title="Delete Quiz">
                             <Trash2 className="w-5 h-5" />
@@ -545,9 +670,7 @@ const AdminDashboard: React.FC = () => {
                     <div className="flex items-start justify-between">
                       <div className="space-y-1">
                         <h3 className="font-bold text-gray-900 dark:text-white">{q.title}</h3>
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-indigo-50 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 uppercase tracking-wider">
-                          {q.category || 'General'}
-                        </span>
+                        {renderQuizCategory(q.category, true)}
                       </div>
                       <button onClick={() => handleDeleteQuiz(q.id)} className="p-2 text-gray-400 hover:text-red-600 transition-colors">
                         <Trash2 className="w-5 h-5" />
@@ -600,8 +723,8 @@ const AdminDashboard: React.FC = () => {
                         {filteredVisitors.map((v) => (
                           <tr key={v.sessionId} className="hover:bg-gray-50 dark:hover:bg-slate-700/30 transition-colors">
                             <td className="px-6 py-4">
-                              <div className="text-xs font-mono text-gray-500 dark:text-slate-400">{v.sessionId.slice(0, 20)}…</div>
-                              {v.uid && <div className="text-[10px] font-mono text-indigo-500 mt-0.5">uid: {v.uid.slice(0, 14)}…</div>}
+                              <div className="text-xs font-mono text-gray-500 dark:text-slate-400">{shortId(v.sessionId, 20)}</div>
+                              {v.uid && <div className="text-[10px] font-mono text-indigo-500 mt-0.5">uid: {shortId(v.uid, 14)}</div>}
                             </td>
                             <td className="px-6 py-4">
                               <div className="flex items-center gap-2">
@@ -640,7 +763,7 @@ const AdminDashboard: React.FC = () => {
                     {filteredVisitors.map((v) => (
                       <div key={v.sessionId} className="p-4 space-y-2">
                         <div className="flex items-center justify-between">
-                          <span className="text-xs font-mono text-gray-400 dark:text-slate-500">{v.sessionId.slice(0, 18)}…</span>
+                          <span className="text-xs font-mono text-gray-400 dark:text-slate-500">{shortId(v.sessionId, 18)}</span>
                           <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${v.isRegistered ? 'bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-400'}`}>
                             <span className={`w-1.5 h-1.5 rounded-full ${v.isRegistered ? 'bg-green-500' : 'bg-gray-400'}`} />
                             {v.isRegistered ? 'مسجّل' : 'زائر'}
@@ -651,7 +774,7 @@ const AdminDashboard: React.FC = () => {
                           <div>أول: {formatDate(v.firstVisit)}</div>
                           <div>آخر: {timeAgo(v.lastVisit)}</div>
                         </div>
-                        {v.uid && <div className="text-[10px] font-mono text-indigo-500">uid: {v.uid.slice(0, 20)}…</div>}
+                        {v.uid && <div className="text-[10px] font-mono text-indigo-500">uid: {shortId(v.uid, 20)}</div>}
                       </div>
                     ))}
                   </div>
@@ -661,7 +784,7 @@ const AdminDashboard: React.FC = () => {
           )}
 
         </AnimatePresence>
-      </div>
+      </motion.div>
 
       {/* Edit Email Modal */}
       <AnimatePresence>

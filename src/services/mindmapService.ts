@@ -1,6 +1,21 @@
 import { GoogleGenAI } from "@google/genai";
 import { getNextApiKey, rotateToNextKey, getKeyCount } from './keyRotation';
 
+const GEMINI_GENERATION_MODELS = ['gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-2.0-flash'];
+
+const isQuotaError = (err: any) => {
+  const message = `${err?.message || ''} ${err?.status || ''} ${err?.code || ''}`;
+  return err?.status === 429 ||
+    err?.code === 429 ||
+    /429|quota|RESOURCE_EXHAUSTED|rate limit/i.test(message);
+};
+
+const createQuotaError = () => {
+  const error = new Error('جميع مفاتيح Gemini أو النماذج المتاحة وصلت لحد الاستخدام مؤقتا. انتظر قليلا ثم حاول مرة أخرى، أو أضف مفتاحا من مشروع Google آخر.');
+  (error as any).statusCode = 429;
+  return error;
+};
+
 export interface MindMapChild {
   label: string;
   children: MindMapChild[];
@@ -18,18 +33,23 @@ export interface MindMapData {
 
 async function callGemini(prompt: string): Promise<MindMapData> {
   const totalKeys = getKeyCount();
-  if (totalKeys === 0) throw new Error('No Gemini API key configured.');
+  if (totalKeys === 0) {
+    throw new Error('لا يوجد مفتاح Gemini API. أنشئ ملف .env.local داخل مجلد quiz وأضف GEMINI_API_KEY=your_key ثم أعد تشغيل السيرفر.');
+  }
 
-  let attemptsLeft = totalKeys;
+  let keyAttemptsLeft = totalKeys;
 
   const attempt = async (): Promise<MindMapData> => {
     const apiKey = getNextApiKey();
-    if (!apiKey) throw new Error('No valid API key.');
+    if (!apiKey) throw new Error('لا يوجد مفتاح Gemini API صالح.');
 
     const ai = new GoogleGenAI({ apiKey });
-    try {
+    let sawQuotaError = false;
+
+    for (const model of GEMINI_GENERATION_MODELS) {
+      try {
       const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
+          model,
         contents: [{ parts: [{ text: prompt }] }],
         config: { responseMimeType: 'application/json' },
       });
@@ -41,15 +61,27 @@ async function callGemini(prompt: string): Promise<MindMapData> {
       const data = JSON.parse(jsonMatch[0]) as MindMapData;
       if (!data.topic || !Array.isArray(data.branches)) throw new Error('Invalid mind map structure.');
       return data;
-    } catch (err: any) {
-      const isRateLimit = err?.message?.includes('429') || err?.message?.includes('quota') || err?.message?.includes('RESOURCE_EXHAUSTED');
-      if (isRateLimit && attemptsLeft > 1) {
-        attemptsLeft--;
-        rotateToNextKey();
-        return attempt();
+      } catch (err: any) {
+        if (isQuotaError(err)) {
+          sawQuotaError = true;
+          console.warn(`[MindMap] ${model} quota reached. Trying another model/key...`);
+          continue;
+        }
+        throw err;
       }
-      throw err;
     }
+
+    if (sawQuotaError && keyAttemptsLeft > 1) {
+      keyAttemptsLeft--;
+      rotateToNextKey();
+      return attempt();
+    }
+
+    if (sawQuotaError) {
+      throw createQuotaError();
+    }
+
+    throw new Error('Failed to generate mind map.');
   };
 
   return attempt();

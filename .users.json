@@ -5,6 +5,34 @@
     "displayName": "مصطفى السوداني",
     "photoURL": "https://lh3.googleusercontent.com/a/ACg8ocLBSOlc4YUN9HyoVnml8YmRaY-aH4B9V7SeVZdu5bwhjT9b2Q=s96-c",
     "role": "user",
-    "createdAt": "2026-05-09T13:11:59.293Z"
+    "createdAt": "2026-05-09T13:11:59.293Z",
+    "plan": "free"
+  },
+  "gsU8IdYVsxgHdwdbsmDVh1ClzO92": {
+    "uid": "gsU8IdYVsxgHdwdbsmDVh1ClzO92",
+    "email": "mstfyalswdany913@gmail.com",
+    "displayName": "مصطفى محمود",
+    "photoURL": "https://lh3.googleusercontent.com/a/ACg8ocLIfLvCm4uw6PvSj8mUSEEBjn54CDEvE1WYfB6aKiin-_OqIGhz=s96-c",
+    "role": "admin",
+    "plan": "free",
+    "createdAt": "2026-05-09T15:24:18.133Z"
+  },
+  "kZpuVtcIAxP4v3cGZbya5fsXr3p2": {
+    "uid": "kZpuVtcIAxP4v3cGZbya5fsXr3p2",
+    "email": "",
+    "displayName": "Mairem Mahmoud",
+    "photoURL": "https://lh3.googleusercontent.com/a/ACg8ocJhX8DczjbVIP_8mGHXGtCb5GKpMlL6mabCClCsAHlFCvZRmA=s96-c",
+    "role": "user",
+    "plan": "free",
+    "createdAt": "2026-05-09T15:55:42.012Z"
+  },
+  "S9c5bF5W88UApBqP95rnPGFCCNR2": {
+    "uid": "S9c5bF5W88UApBqP95rnPGFCCNR2",
+    "email": "",
+    "displayName": "Sasa Amrc",
+    "photoURL": "https://lh3.googleusercontent.com/a/ACg8ocL2F1FtkTaRHLR3sZKFwpufmBz3j4NfIzcOGhWowOXY2WcASg=s96-c",
+    "role": "user",
+    "plan": "free",
+    "createdAt": "2026-05-10T11:32:33.398Z"
   }
 }

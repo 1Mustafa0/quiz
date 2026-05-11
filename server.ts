@@ -2,78 +2,712 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
+import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
+import { randomUUID } from 'crypto';
+import { spawn } from 'child_process';
 import multer from 'multer';
 import { createRequire } from 'module';
 import { GoogleGenAI } from '@google/genai';
+import JSZip from 'jszip';
 const require = createRequire(import.meta.url);
 const pdf = require('pdf-parse');
 const pdfParser = typeof pdf === 'function' ? pdf : pdf.default;
+const { createCanvas } = require('@napi-rs/canvas');
 import mammothImport from 'mammoth';
 const mammoth = (mammothImport as any).default || mammothImport;
 import officeParserImport from 'officeparser';
 const officeParser = (officeParserImport as any).default || officeParserImport;
 import { parse as csvParse } from 'csv-parse/sync';
+import { generateMindMap, generateMindMapFromContent } from './src/services/mindmapService';
+import { generateQuizFromContent } from './src/services/geminiService';
 
-const OCR_SYSTEM_PROMPT = `أنت نظام متخصص في استخراج النصوص من الملفات التعليمية.
+dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
-قد يكون الملف:
-- PDF يحتوي على نص حقيقي
-- PDF عبارة عن صور ممسوحة Scanner
-- صور داخل PDF
-- صفحات بجودة ضعيفة
-- عربي أو إنجليزي أو مختلط
+const OCR_SYSTEM_PROMPT = `You are an OCR engine for educational material.
 
-المطلوب:
-1. استخرج كل النصوص الممكنة من الملف.
-2. إذا فشل استخراج النص العادي استخدم OCR تلقائيًا.
-3. حاول فهم النص حتى مع أخطاء OCR.
-4. حافظ على ترتيب المحتوى والعناوين قدر الإمكان.
-5. تجاهل العلامات غير المفهومة والضوضاء.
-6. لا تلخص المحتوى.
-7. أعد النص بشكل نظيف ومنظم.
-8. أصلح أخطاء OCR الشائعة إن أمكن.
-9. إذا كانت الصفحة صورة فقط استخرج النص منها بالكامل.
-10. إذا وُجدت جداول أو نقاط حاول تحويلها لنص مفهوم.
+Task:
+- Extract all visible text from the provided image or document.
+- Preserve the reading order, headings, bullet points, labels, tables, and slide structure as much as possible.
+- The content may be Arabic, English, or mixed. Keep the original language.
+- Do not summarize.
+- Do not add information that is not visible.
+- Ignore logos, decorative elements, noise, and repeated watermarks unless they contain meaningful educational text.
+- If a part is unreadable, write [unreadable].
 
-تعليمات مهمة:
-- لا تنشئ معلومات غير موجودة.
-- لا تشرح أي شيء.
-- الناتج يكون النص المستخرج فقط.
-- إذا كانت هناك أجزاء غير مقروءة ضع مكانها [غير واضح].`;
+Return only the extracted text.`;
 
-async function extractWithGeminiOcr(buffer: Buffer, mimeType: string): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_1;
-  if (!apiKey) {
+function getServerGeminiApiKeys(): string[] {
+  const invalid = new Set(['', 'MY_GEMINI_API_KEY', 'undefined', 'null']);
+  const keys: string[] = [];
+  const addKey = (key: string | undefined) => {
+    const clean = key?.trim();
+    if (clean && !invalid.has(clean) && !keys.includes(clean)) {
+      keys.push(clean);
+    }
+  };
+
+  addKey(process.env.GEMINI_API_KEY);
+  addKey(process.env.GOOGLE_API_KEY);
+
+  const multi = process.env.GEMINI_API_KEYS || '';
+  multi.split(',').forEach(key => addKey(key));
+
+  Object.keys(process.env)
+    .filter(name => /^GEMINI_API_KEY_\d+$/.test(name))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+    .forEach(name => addKey(process.env[name]));
+
+  Object.keys(process.env)
+    .filter(name => /^\d+$/.test(name))
+    .sort((a, b) => Number(a) - Number(b))
+    .forEach(name => addKey(process.env[name]));
+
+  return keys;
+}
+
+function getServerGeminiApiKey(): string {
+  return getServerGeminiApiKeys()[0] || '';
+}
+
+function isGeminiQuotaError(err: any): boolean {
+  const message = `${err?.message || ''} ${err?.status || ''} ${err?.code || ''}`;
+  return err?.status === 429 ||
+    err?.code === 429 ||
+    /429|quota|RESOURCE_EXHAUSTED|rate limit/i.test(message);
+}
+
+function createGeminiQuotaError(operation: string): Error {
+  const error = new Error(`${operation} quota is temporarily exhausted across the available Gemini keys/models. Try again shortly or add a key from another Google Cloud project.`);
+  (error as any).statusCode = 429;
+  (error as any).publicMessage = 'خدمة الذكاء الاصطناعي وصلت لحد الاستخدام مؤقتا. انتظر قليلا ثم حاول مرة أخرى.';
+  return error;
+}
+
+type GeminiOcrInput = {
+  buffer: Buffer;
+  mimeType: string;
+  label?: string;
+};
+
+type OcrInput = GeminiOcrInput;
+
+type OcrResult = {
+  text: string;
+  method: string;
+  usedGemini: boolean;
+};
+
+const LOCAL_OCR_MIN_CHARS = Number(process.env.LOCAL_OCR_MIN_CHARS || 10);
+const LOCAL_OCR_TIMEOUT_MS = Number(process.env.LOCAL_OCR_TIMEOUT_MS || 180000);
+const LOCAL_OCR_LANGS = process.env.LOCAL_OCR_LANGS || 'ara+eng';
+const PADDLEOCR_LANG = process.env.PADDLEOCR_LANG || 'arabic';
+const ALLOW_GEMINI_OCR_FALLBACK = process.env.ALLOW_GEMINI_OCR_FALLBACK === 'true';
+
+const OCR_CONTEXT_METHODS: Record<string, { localPaddle: string; localTesseract: string; gemini: string }> = {
+  image: {
+    localPaddle: 'local-paddleocr-image',
+    localTesseract: 'local-tesseractjs-image',
+    gemini: 'gemini-ocr-image',
+  },
+  'pdf-images': {
+    localPaddle: 'local-paddleocr-pdf-images',
+    localTesseract: 'local-tesseractjs-pdf-images',
+    gemini: 'gemini-ocr-pdf-images',
+  },
+  'office-images': {
+    localPaddle: 'local-paddleocr-office-images',
+    localTesseract: 'local-tesseractjs-office-images',
+    gemini: 'gemini-ocr-office-images',
+  },
+};
+
+function getImageExtensionForMime(mimeType: string): string {
+  if (mimeType.includes('jpeg') || mimeType.includes('jpg')) return '.jpg';
+  if (mimeType.includes('webp')) return '.webp';
+  if (mimeType.includes('gif')) return '.gif';
+  if (mimeType.includes('bmp')) return '.bmp';
+  if (mimeType.includes('tiff')) return '.tiff';
+  return '.png';
+}
+
+function normalizeOcrText(text: string): string {
+  return (text || '')
+    .replace(/\r/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function parseLastJsonObject(output: string): any | null {
+  const trimmed = (output || '').trim();
+  if (!trimmed) return null;
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const start = trimmed.lastIndexOf('{');
+    const end = trimmed.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(trimmed.slice(start, end + 1));
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  return null;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function runProcess(command: string, args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {}) {
+  return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let timeout: NodeJS.Timeout | undefined;
+
+    if (options.timeoutMs) {
+      timeout = setTimeout(() => {
+        child.kill();
+        reject(new Error(`${command} timed out after ${options.timeoutMs}ms`));
+      }, options.timeoutMs);
+    }
+
+    child.stdout?.on('data', chunk => { stdout += chunk.toString(); });
+    child.stderr?.on('data', chunk => { stderr += chunk.toString(); });
+    child.on('error', reject);
+    child.on('close', code => {
+      if (timeout) clearTimeout(timeout);
+      resolve({ code, stdout, stderr });
+    });
+  });
+}
+
+async function runPaddleOcr(inputs: OcrInput[]): Promise<string> {
+  if (process.env.DISABLE_PADDLE_OCR === 'true') return '';
+
+  const scriptPath = path.join(process.cwd(), 'tools', 'local_ocr.py');
+  if (!fs.existsSync(scriptPath)) return '';
+
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'quiz-paddle-ocr-'));
+  try {
+    const imagePaths: string[] = [];
+    for (const [index, input] of inputs.entries()) {
+      const imagePath = path.join(tempDir, `image-${index + 1}${getImageExtensionForMime(input.mimeType)}`);
+      await fs.promises.writeFile(imagePath, input.buffer);
+      imagePaths.push(imagePath);
+    }
+
+    const candidates = process.env.LOCAL_OCR_PYTHON
+      ? [{ command: process.env.LOCAL_OCR_PYTHON, args: [] }]
+      : [
+          { command: 'python', args: [] },
+          { command: 'python3', args: [] },
+          { command: 'py', args: ['-3'] },
+        ];
+
+    for (const candidate of candidates) {
+      try {
+        const result = await runProcess(
+          candidate.command,
+          [...candidate.args, scriptPath, ...imagePaths],
+          {
+            cwd: process.cwd(),
+            timeoutMs: LOCAL_OCR_TIMEOUT_MS,
+            env: {
+              ...process.env,
+              PADDLEOCR_LANG,
+            },
+          }
+        );
+
+        if (result.code !== 0) {
+          const message = result.stderr || result.stdout;
+          console.warn(`[PaddleOCR] ${candidate.command} exited with ${result.code}:`, message.slice(0, 300));
+          continue;
+        }
+
+        const parsed = parseLastJsonObject(result.stdout);
+        const text = normalizeOcrText(parsed?.text || '');
+        if (text.length >= LOCAL_OCR_MIN_CHARS) {
+          console.log(`[PaddleOCR] extracted ${text.length} chars from ${inputs.length} image(s).`);
+          return text;
+        }
+      } catch (err: any) {
+        console.warn(`[PaddleOCR] unavailable via ${candidate.command}:`, err?.message || err);
+      }
+    }
+  } finally {
+    await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+
+  return '';
+}
+
+async function runTesseractJsOcr(inputs: OcrInput[]): Promise<string> {
+  if (process.env.DISABLE_TESSERACT_JS_OCR === 'true') return '';
+
+  return withTimeout((async () => {
+    const { createWorker } = await import('tesseract.js');
+    const cachePath = path.join(process.cwd(), '.local', 'tesseract-cache');
+    await fs.promises.mkdir(cachePath, { recursive: true });
+
+    const worker = await createWorker(LOCAL_OCR_LANGS, 1, {
+      cachePath,
+      logger: message => {
+        if (message?.status === 'recognizing text') {
+          console.log(`[Tesseract.js] ${Math.round((message.progress || 0) * 100)}%`);
+        }
+      },
+    });
+
+    try {
+      const parts: string[] = [];
+      for (const [index, input] of inputs.entries()) {
+        const result = await worker.recognize(input.buffer);
+        const text = normalizeOcrText(result?.data?.text || '');
+        if (text) {
+          parts.push(`${input.label || `Image ${index + 1}`}:\n${text}`);
+        }
+      }
+      const finalText = normalizeOcrText(parts.join('\n\n'));
+      if (finalText.length >= LOCAL_OCR_MIN_CHARS) {
+        console.log(`[Tesseract.js] extracted ${finalText.length} chars from ${inputs.length} image(s).`);
+        return finalText;
+      }
+    } finally {
+      await worker.terminate();
+    }
+
+    return '';
+  })(), LOCAL_OCR_TIMEOUT_MS, 'Tesseract.js OCR').catch((err: any) => {
+    console.warn('[Tesseract.js] OCR failed:', err?.message || err);
+    return '';
+  });
+}
+
+async function extractWithLocalOcrInputs(inputs: OcrInput[]): Promise<{ text: string; engine: 'paddleocr' | 'tesseractjs' | '' }> {
+  if (process.env.DISABLE_LOCAL_OCR === 'true') {
+    return { text: '', engine: '' };
+  }
+
+  const tesseractText = await runTesseractJsOcr(inputs);
+  if (tesseractText.length >= LOCAL_OCR_MIN_CHARS) {
+    return { text: tesseractText, engine: 'tesseractjs' };
+  }
+
+  const paddleText = await runPaddleOcr(inputs);
+  if (paddleText.length >= LOCAL_OCR_MIN_CHARS) {
+    return { text: paddleText, engine: 'paddleocr' };
+  }
+
+  return { text: '', engine: '' };
+}
+
+async function extractWithGeminiOcrInputs(inputs: GeminiOcrInput[]): Promise<string> {
+  const apiKeys = getServerGeminiApiKeys();
+  if (apiKeys.length === 0) {
     console.warn('[GeminiOCR] No API key found, skipping OCR');
     return '';
   }
-  try {
-    console.log(`[GeminiOCR] Sending ${mimeType} file (${buffer.length} bytes) to Gemini for OCR...`);
+
+  const models = ['gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-2.0-flash'];
+  let sawQuotaError = false;
+  const totalBytes = inputs.reduce((sum, input) => sum + input.buffer.length, 0);
+
+  for (const [keyIndex, apiKey] of apiKeys.entries()) {
     const ai = new GoogleGenAI({ apiKey });
-    const base64 = buffer.toString('base64');
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.0-flash',
-      contents: [{
-        parts: [
-          { text: OCR_SYSTEM_PROMPT },
-          { inlineData: { data: base64, mimeType } }
-        ]
-      }]
-    });
-    const result = response.text?.trim() || '';
-    console.log(`[GeminiOCR] Extracted ${result.length} chars`);
-    return result;
-  } catch (err: any) {
-    console.error('[GeminiOCR] Failed:', err?.message || err);
-    return '';
+
+    for (const model of models) {
+      try {
+        console.log(`[GeminiOCR] Key ${keyIndex + 1}/${apiKeys.length}: sending ${inputs.length} file(s), ${totalBytes} bytes to ${model} for OCR...`);
+        const parts: any[] = [{
+          text: inputs.length === 1
+            ? OCR_SYSTEM_PROMPT
+            : `${OCR_SYSTEM_PROMPT}\n\nMultiple images are attached. Extract each image separately and keep the provided image labels in the output.`,
+        }];
+
+        for (const input of inputs) {
+          if (input.label) {
+            parts.push({ text: `\n\n[${input.label}]` });
+          }
+          parts.push({
+            inlineData: {
+              data: input.buffer.toString('base64'),
+              mimeType: input.mimeType,
+            },
+          });
+        }
+
+        const response = await ai.models.generateContent({
+          model,
+          contents: [{ parts }]
+        });
+        const result = response.text?.trim() || '';
+        console.log(`[GeminiOCR] ${model} extracted ${result.length} chars`);
+        if (result) return result;
+      } catch (err: any) {
+        if (isGeminiQuotaError(err)) {
+          sawQuotaError = true;
+          console.warn(`[GeminiOCR] ${model} quota reached on key ${keyIndex + 1}. Trying another model/key...`);
+          continue;
+        }
+        console.error(`[GeminiOCR] ${model} failed on key ${keyIndex + 1}:`, err?.message || err);
+      }
+    }
   }
+
+  if (sawQuotaError) {
+    throw createGeminiQuotaError('Gemini OCR');
+  }
+
+  return '';
+}
+
+async function extractWithGeminiOcr(buffer: Buffer, mimeType: string): Promise<string> {
+  return extractWithGeminiOcrInputs([{ buffer, mimeType }]);
+}
+
+async function extractWithBestOcrInputs(inputs: OcrInput[], context: keyof typeof OCR_CONTEXT_METHODS): Promise<OcrResult> {
+  const methodNames = OCR_CONTEXT_METHODS[context] || OCR_CONTEXT_METHODS.image;
+  const local = await extractWithLocalOcrInputs(inputs);
+  if (local.text.length >= LOCAL_OCR_MIN_CHARS) {
+    return {
+      text: local.text,
+      method: local.engine === 'paddleocr' ? methodNames.localPaddle : methodNames.localTesseract,
+      usedGemini: false,
+    };
+  }
+
+  if (!ALLOW_GEMINI_OCR_FALLBACK) {
+    console.warn('[OCR] Local OCR did not extract enough text. Gemini OCR fallback is disabled.');
+    return {
+      text: '',
+      method: 'local-ocr-failed',
+      usedGemini: false,
+    };
+  }
+
+  const geminiText = normalizeOcrText(await extractWithGeminiOcrInputs(inputs));
+  return {
+    text: geminiText,
+    method: methodNames.gemini,
+    usedGemini: true,
+  };
+}
+
+async function extractWithBestOcr(buffer: Buffer, mimeType: string, context: keyof typeof OCR_CONTEXT_METHODS): Promise<OcrResult> {
+  return extractWithBestOcrInputs([{ buffer, mimeType }], context);
+}
+
+function collectTextFields(value: any, output: string[] = []): string[] {
+  if (!value || typeof value !== 'object') return output;
+
+  if (typeof value.text === 'string' && value.text.trim()) {
+    output.push(value.text.trim());
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach(item => collectTextFields(item, output));
+    return output;
+  }
+
+  Object.values(value).forEach(item => collectTextFields(item, output));
+  return output;
+}
+
+function parseJsonIfPossible(value: string): any | null {
+  const trimmed = value.trim();
+  if (!trimmed || !['{', '['].includes(trimmed[0])) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+}
+
+function extractMeaningfulOfficeText(extracted: any): string {
+  if (typeof extracted === 'string') {
+    const parsed = parseJsonIfPossible(extracted);
+    if (parsed) {
+      return collectTextFields(parsed).join('\n').trim();
+    }
+    return extracted.trim();
+  }
+
+  if (!extracted || typeof extracted !== 'object') return '';
+
+  if (typeof extracted.text === 'string' && extracted.text.trim()) {
+    return extracted.text.trim();
+  }
+
+  return collectTextFields(extracted).join('\n').trim();
+}
+
+function normalizeExtractedFileText(value: string): string {
+  return String(value || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/\u0000/g, '')
+    .split('\n')
+    .map(line => line.replace(/[ \t\f\v]+/g, ' ').trim())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function formatCsvRecordsForPreview(records: any[]): string {
+  if (!Array.isArray(records) || records.length === 0) return '';
+
+  const rows = records
+    .filter(row => Array.isArray(row) ? row.some(cell => String(cell ?? '').trim()) : String(row ?? '').trim())
+    .slice(0, 250);
+
+  if (rows.length === 0) return '';
+
+  const firstRow = Array.isArray(rows[0]) ? rows[0].map(cell => String(cell ?? '').trim()) : [];
+  const hasHeader = firstRow.length > 0 && firstRow.every(cell => cell && !/^\d+(\.\d+)?$/.test(cell));
+  const headers = hasHeader ? firstRow : [];
+  const dataRows = hasHeader ? rows.slice(1) : rows;
+
+  const parts = ['Table 1'];
+  dataRows.forEach((row, rowIndex) => {
+    const cells = Array.isArray(row) ? row : [row];
+    parts.push(`Row ${rowIndex + 1}:`);
+    cells.forEach((cell, cellIndex) => {
+      const value = String(cell ?? '').trim();
+      if (!value) return;
+      const label = headers[cellIndex] || `Column ${cellIndex + 1}`;
+      parts.push(`- ${label}: ${value}`);
+    });
+  });
+
+  return parts.join('\n');
+}
+
+function looksLikeTechnicalOfficeDump(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+
+  const parsed = parseJsonIfPossible(trimmed);
+  if (parsed) {
+    const meaningful = collectTextFields(parsed).join('').trim();
+    const type = typeof parsed.type === 'string' ? parsed.type.toLowerCase() : '';
+    return ['pptx', 'docx', 'xlsx'].includes(type) && meaningful.length < 20;
+  }
+
+  return /"attachmentName"\s*:\s*"image\d+\./i.test(trimmed) &&
+    /"type"\s*:\s*"image"/i.test(trimmed) &&
+    !/"text"\s*:\s*"[^"]{20,}"/i.test(trimmed);
+}
+
+function imageMimeFromPath(filePath: string): string | null {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.png') return 'image/png';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.gif') return 'image/gif';
+  if (ext === '.bmp') return 'image/bmp';
+  if (ext === '.tif' || ext === '.tiff') return 'image/tiff';
+  return null;
+}
+
+async function renderPdfPagesToPng(buffer: Buffer, maxPages = 20): Promise<Buffer[]> {
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const loadingTask = pdfjs.getDocument({
+    data: new Uint8Array(buffer),
+    disableFontFace: true,
+    isEvalSupported: false,
+  });
+  const doc = await loadingTask.promise;
+  const pages: Buffer[] = [];
+  const pageCount = Math.min(doc.numPages, maxPages);
+
+  for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
+    const page = await doc.getPage(pageNumber);
+    const viewportAtOne = page.getViewport({ scale: 1 });
+    const longestSide = Math.max(viewportAtOne.width, viewportAtOne.height);
+    const scale = Math.min(2.6, Math.max(1.6, 2200 / longestSide));
+    const viewport = page.getViewport({ scale });
+    const width = Math.ceil(viewport.width);
+    const height = Math.ceil(viewport.height);
+    const canvas = createCanvas(width, height);
+    const canvasContext = canvas.getContext('2d');
+
+    await page.render({ canvas, canvasContext, viewport }).promise;
+    pages.push(canvas.toBuffer('image/png'));
+    page.cleanup?.();
+  }
+
+  await doc.destroy?.();
+  return pages;
+}
+
+async function extractPdfImageOcr(buffer: Buffer): Promise<{ text: string; pageCount: number; ocrPageCount: number; ocrChars: number; method?: string; usedGemini?: boolean }> {
+  try {
+    const pageImages = await renderPdfPagesToPng(buffer);
+    if (pageImages.length === 0) {
+      return { text: '', pageCount: 0, ocrPageCount: 0, ocrChars: 0 };
+    }
+
+    console.log(`[PdfImageOCR] Rendered ${pageImages.length} PDF pages to images. Running OCR...`);
+    const parts: string[] = [];
+    let ocrPageCount = 0;
+    let ocrChars = 0;
+    let ocrMethod = '';
+    let usedGemini = false;
+
+    for (const [index, imageBuffer] of pageImages.entries()) {
+      const pageOcr = await extractWithBestOcr(imageBuffer, 'image/png', 'pdf-images');
+      const pageText = pageOcr.text;
+      if (pageText.trim()) {
+        ocrPageCount += 1;
+        ocrChars += pageText.trim().length;
+        ocrMethod = ocrMethod && ocrMethod !== pageOcr.method ? 'mixed-ocr-pdf-images' : pageOcr.method;
+        usedGemini = usedGemini || pageOcr.usedGemini;
+        parts.push(`Page ${index + 1}:\n${pageText.trim()}`);
+      }
+    }
+
+    return {
+      text: parts.join('\n\n').trim(),
+      pageCount: pageImages.length,
+      ocrPageCount,
+      ocrChars,
+      method: ocrMethod || undefined,
+      usedGemini,
+    };
+  } catch (err: any) {
+    console.warn('[PdfImageOCR] PDF to image OCR failed:', err?.message || err);
+    return { text: '', pageCount: 0, ocrPageCount: 0, ocrChars: 0 };
+  }
+}
+
+async function getOfficeImageEntries(buffer: Buffer) {
+  const zip = await JSZip.loadAsync(buffer);
+  return Object.values(zip.files)
+    .filter(file => !file.dir && /\/media\//i.test(file.name) && imageMimeFromPath(file.name))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .slice(0, 25);
+}
+
+async function extractOfficeImageOcr(buffer: Buffer): Promise<{ text: string; imageCount: number; ocrImageCount: number; ocrChars: number; quotaExhausted?: boolean; method?: string; usedGemini?: boolean }> {
+  const imageEntries = await getOfficeImageEntries(buffer);
+
+  if (imageEntries.length === 0) {
+    return { text: '', imageCount: 0, ocrImageCount: 0, ocrChars: 0 };
+  }
+
+  console.log(`[OfficeOCR] Found ${imageEntries.length} embedded images. Running OCR...`);
+  const parts: string[] = [];
+  let ocrImageCount = 0;
+  let ocrChars = 0;
+  let quotaExhausted = false;
+  let ocrMethod = '';
+  let usedGemini = false;
+  let currentBatch: GeminiOcrInput[] = [];
+  let currentBatchBytes = 0;
+  const batches: GeminiOcrInput[][] = [];
+  const maxBatchBytes = 4 * 1024 * 1024;
+  const maxBatchImages = 3;
+
+  for (const [index, file] of imageEntries.entries()) {
+    const mimeType = imageMimeFromPath(file.name);
+    if (!mimeType) continue;
+
+    const imageBuffer = Buffer.from(await file.async('uint8array'));
+    if (imageBuffer.length < 1024) continue;
+
+    if (
+      currentBatch.length > 0 &&
+      (currentBatch.length >= maxBatchImages || currentBatchBytes + imageBuffer.length > maxBatchBytes)
+    ) {
+      batches.push(currentBatch);
+      currentBatch = [];
+      currentBatchBytes = 0;
+    }
+
+    currentBatch.push({
+      buffer: imageBuffer,
+      mimeType,
+      label: `Slide image ${index + 1} (${path.basename(file.name)})`,
+    });
+    currentBatchBytes += imageBuffer.length;
+  }
+
+  if (currentBatch.length > 0) {
+    batches.push(currentBatch);
+  }
+
+  for (const batch of batches) {
+    try {
+      const batchOcr = await extractWithBestOcrInputs(batch, 'office-images');
+      const imageText = batchOcr.text;
+      if (imageText.trim()) {
+        ocrImageCount += batch.length;
+        ocrChars += imageText.trim().length;
+        ocrMethod = ocrMethod && ocrMethod !== batchOcr.method ? 'mixed-ocr-office-images' : batchOcr.method;
+        usedGemini = usedGemini || batchOcr.usedGemini;
+        parts.push(imageText.trim());
+      }
+    } catch (err: any) {
+      if (isGeminiQuotaError(err) || err?.statusCode === 429) {
+        quotaExhausted = true;
+        if (parts.length > 0) {
+          console.warn('[OfficeOCR] OCR quota exhausted after partial extraction. Returning partial text.');
+          break;
+        }
+      }
+      throw err;
+    }
+  }
+
+  return {
+    text: parts.join('\n\n').trim(),
+    imageCount: imageEntries.length,
+    ocrImageCount,
+    ocrChars,
+    quotaExhausted,
+    method: ocrMethod || undefined,
+    usedGemini,
+  };
 }
 
 const IMAGE_MIME_TYPES = new Set([
   'image/jpeg', 'image/jpg', 'image/png', 'image/webp',
   'image/gif', 'image/bmp', 'image/tiff'
 ]);
+
+const MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024;
+
+interface ExtractionDiagnostics {
+  embeddedImageCount?: number;
+  ocrImageCount?: number;
+  ocrChars?: number;
+  renderedPdfPages?: number;
+  ocrPdfPages?: number;
+  note?: string;
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -129,7 +763,7 @@ interface UserRecord {
   displayName: string;
   photoURL?: string | null;
   role: string;
-  plan: 'free' | 'pro';
+  plan: 'free';
   createdAt: string;
 }
 
@@ -156,6 +790,46 @@ function saveUsersStore() {
 }
 
 loadUsers();
+
+// ── Public Shared Quiz Store ─────────────────────────────────────
+const SHARED_QUIZZES_FILE = path.join(process.cwd(), '.shared-quizzes.json');
+
+interface SharedQuizRecord {
+  shareId: string;
+  quizId: string;
+  title: string;
+  description?: string;
+  category?: string;
+  difficulty?: string;
+  timer: number;
+  questions: any[];
+  ownerUid: string;
+  createdAt: string;
+}
+
+let sharedQuizStore: Map<string, SharedQuizRecord> = new Map();
+
+function loadSharedQuizzes() {
+  try {
+    if (fs.existsSync(SHARED_QUIZZES_FILE)) {
+      const data = JSON.parse(fs.readFileSync(SHARED_QUIZZES_FILE, 'utf-8'));
+      sharedQuizStore = new Map(Object.entries(data));
+      console.log(`[SharedQuizzes] Loaded ${sharedQuizStore.size} shared quiz records`);
+    }
+  } catch (e) {
+    console.warn('[SharedQuizzes] Could not load shared quizzes file:', e);
+  }
+}
+
+function saveSharedQuizzes() {
+  try {
+    fs.writeFileSync(SHARED_QUIZZES_FILE, JSON.stringify(Object.fromEntries(sharedQuizStore), null, 2));
+  } catch (e) {
+    console.warn('[SharedQuizzes] Could not save shared quizzes file:', e);
+  }
+}
+
+loadSharedQuizzes();
 
 // Helper: parse Firestore REST document fields to plain object
 function parseFirestoreDoc(doc: any): Record<string, any> {
@@ -189,6 +863,18 @@ async function fetchFirestoreCollection(collection: string, idToken: string, pag
   });
 }
 
+async function fetchFirestoreDocument(collection: string, docId: string, idToken: string): Promise<any | null> {
+  const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/${FIREBASE_DB_ID}/documents/${collection}/${docId}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${idToken}` } });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const err: any = await res.json().catch(() => ({}));
+    throw new Error(err?.error?.message || `Firestore REST ${res.status}`);
+  }
+  const data: any = await res.json();
+  return { id: docId, ...parseFirestoreDoc(data) };
+}
+
 // ── Firebase token verification (REST API) ───────────────────────
 async function verifyFirebaseToken(idToken: string): Promise<{ uid: string; email: string } | null> {
   try {
@@ -206,6 +892,34 @@ async function verifyFirebaseToken(idToken: string): Promise<{ uid: string; emai
   }
 }
 
+function getBearerToken(req: any): string {
+  return String(req.headers?.authorization || '').replace(/^Bearer\s+/i, '').trim();
+}
+
+async function requestIsOwner(req: any): Promise<boolean> {
+  const idToken = getBearerToken(req);
+  if (!idToken) return false;
+  const tokenUser = await verifyFirebaseToken(idToken);
+  return tokenUser?.email === ADMIN_EMAIL;
+}
+
+async function tokenUserIsAdmin(tokenUser: { uid: string; email: string } | null, idToken: string): Promise<boolean> {
+  if (!tokenUser) return false;
+  if (tokenUser.email === ADMIN_EMAIL) return true;
+
+  try {
+    const profile = await fetchFirestoreDocument('users', tokenUser.uid, idToken);
+    return profile?.role === 'admin';
+  } catch (err: any) {
+    console.warn('[admin-check] Firestore role lookup failed:', err?.message || err);
+    return false;
+  }
+}
+
+function privateDetails(isOwner: boolean, details: string, publicDetails: string) {
+  return isOwner ? details : publicDetails;
+}
+
 // Global error handlers to prevent process crashes
 process.on('uncaughtException', (err) => {
   console.error('UNCAUGHT EXCEPTION:', err);
@@ -215,7 +929,7 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('UNHANDLED REJECTION at:', promise, 'reason:', reason);
 });
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } }); // 20 MB limit
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_UPLOAD_SIZE_BYTES } });
 
 async function startServer() {
   const app = express();
@@ -262,21 +976,28 @@ async function startServer() {
       const tokenUser = await verifyFirebaseToken(idToken);
       if (!tokenUser) return res.status(401).json({ error: 'invalid token' });
 
-      const { uid, email, displayName, photoURL, role } = req.body || {};
-      const resolvedUid = uid || tokenUser.uid;
+      const { displayName, photoURL } = req.body || {};
+      const resolvedUid = tokenUser.uid;
+      const resolvedEmail = tokenUser.email || '';
       const existing = userStore.get(resolvedUid);
+      const firestoreProfile = await fetchFirestoreDocument('users', resolvedUid, idToken).catch(() => null);
+      const resolvedRole = resolvedEmail === ADMIN_EMAIL
+        ? 'admin'
+        : firestoreProfile?.role === 'admin'
+          ? 'admin'
+          : 'user';
 
       userStore.set(resolvedUid, {
         uid: resolvedUid,
-        email: email || tokenUser.email || existing?.email || '',
+        email: resolvedEmail,
         displayName: displayName || existing?.displayName || '',
         photoURL: photoURL !== undefined ? photoURL : (existing?.photoURL ?? null),
-        role: role || existing?.role || 'user',
-        plan: existing?.plan || 'free',
+        role: resolvedRole,
+        plan: 'free',
         createdAt: existing?.createdAt || new Date().toISOString(),
       });
       saveUsersStore();
-      res.json({ ok: true, plan: userStore.get(resolvedUid)?.plan || 'free' });
+      res.json({ ok: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -288,7 +1009,7 @@ async function startServer() {
       const idToken = (req.headers.authorization || '').replace('Bearer ', '');
       if (!idToken) return res.status(401).json({ error: 'unauthorized' });
       const tokenUser = await verifyFirebaseToken(idToken);
-      if (!tokenUser || tokenUser.email !== ADMIN_EMAIL) {
+      if (!tokenUser || !(await tokenUserIsAdmin(tokenUser, idToken))) {
         return res.status(403).json({ error: 'forbidden' });
       }
 
@@ -298,14 +1019,16 @@ async function startServer() {
         if (fsDocs.length > 0) {
           fsDocs.forEach((d: any) => {
             const uid = d.id || d.uid;
-            if (uid && !userStore.has(uid)) {
+            if (uid) {
+              const existing = userStore.get(uid);
               userStore.set(uid, {
                 uid,
                 email: d.email || '',
                 displayName: d.displayName || '',
                 photoURL: d.photoURL || null,
                 role: d.role || 'user',
-                createdAt: d.createdAt || new Date().toISOString(),
+                plan: 'free',
+                createdAt: d.createdAt || existing?.createdAt || new Date().toISOString(),
               });
             }
           });
@@ -330,8 +1053,8 @@ async function startServer() {
       if (!idToken) return res.status(401).json({ error: 'unauthorized' });
       const tokenUser = await verifyFirebaseToken(idToken);
       if (!tokenUser) return res.status(401).json({ error: 'invalid token' });
-      const record = userStore.get(tokenUser.uid);
-      res.json({ plan: record?.plan || 'free' });
+      
+      res.json({ plan: 'free' });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -343,15 +1066,15 @@ async function startServer() {
       const idToken = (req.headers.authorization || '').replace('Bearer ', '');
       if (!idToken) return res.status(401).json({ error: 'unauthorized' });
       const tokenUser = await verifyFirebaseToken(idToken);
-      if (!tokenUser || tokenUser.email !== ADMIN_EMAIL) return res.status(403).json({ error: 'forbidden' });
-      const { uid, plan } = req.body || {};
-      if (!uid || !['free', 'pro'].includes(plan)) return res.status(400).json({ error: 'uid and plan (free|pro) required' });
+      if (!tokenUser || !(await tokenUserIsAdmin(tokenUser, idToken))) return res.status(403).json({ error: 'forbidden' });
+      const { uid } = req.body || {};
+      if (!uid) return res.status(400).json({ error: 'uid required' });
       const existing = userStore.get(uid);
       if (!existing) return res.status(404).json({ error: 'user not found' });
-      userStore.set(uid, { ...existing, plan });
+      userStore.set(uid, { ...existing, plan: 'free' });
       saveUsersStore();
-      console.log(`[set-plan] ${uid} → ${plan}`);
-      res.json({ ok: true, uid, plan });
+      console.log(`[set-plan] ignored for ${uid}; all features are free`);
+      res.json({ ok: true, uid, plan: 'free' });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -363,7 +1086,7 @@ async function startServer() {
       const idToken = (req.headers.authorization || '').replace('Bearer ', '');
       if (!idToken) return res.status(401).json({ error: 'unauthorized' });
       const tokenUser = await verifyFirebaseToken(idToken);
-      if (!tokenUser || tokenUser.email !== ADMIN_EMAIL) {
+      if (!tokenUser || !(await tokenUserIsAdmin(tokenUser, idToken))) {
         return res.status(403).json({ error: 'forbidden' });
       }
 
@@ -382,13 +1105,86 @@ async function startServer() {
     }
   });
 
+  // ── Public sharing: create a guest exam link for one quiz ───────
+  app.post('/api/share-quiz', express.json(), async (req: any, res: any) => {
+    let isOwnerRequest = false;
+    try {
+      const idToken = (req.headers.authorization || '').replace('Bearer ', '');
+      if (!idToken) return res.status(401).json({ error: 'unauthorized' });
+
+      const tokenUser = await verifyFirebaseToken(idToken);
+      if (!tokenUser) return res.status(401).json({ error: 'invalid token' });
+      isOwnerRequest = tokenUser.email === ADMIN_EMAIL;
+
+      const { quizId } = req.body || {};
+      if (!quizId || typeof quizId !== 'string') {
+        return res.status(400).json({ error: 'quizId required' });
+      }
+
+      const quiz = await fetchFirestoreDocument('quizzes', quizId, idToken);
+      if (!quiz) return res.status(404).json({ error: 'quiz not found' });
+      if (quiz.authorUid !== tokenUser.uid && tokenUser.email !== ADMIN_EMAIL) {
+        return res.status(403).json({ error: 'forbidden' });
+      }
+      if (!Array.isArray(quiz.questions) || quiz.questions.length === 0) {
+        return res.status(400).json({ error: 'quiz has no questions' });
+      }
+
+      const existing = Array.from(sharedQuizStore.values())
+        .find(shared => shared.quizId === quizId && shared.ownerUid === tokenUser.uid);
+
+      const shareId = existing?.shareId || randomUUID().replace(/-/g, '').slice(0, 16);
+      const record: SharedQuizRecord = {
+        shareId,
+        quizId,
+        title: quiz.title || 'Shared Quiz',
+        description: quiz.description || '',
+        category: quiz.category || 'General',
+        difficulty: quiz.difficulty || 'medium',
+        timer: Number(quiz.timer ?? 10),
+        questions: quiz.questions,
+        ownerUid: tokenUser.uid,
+        createdAt: existing?.createdAt || new Date().toISOString(),
+      };
+
+      sharedQuizStore.set(shareId, record);
+      saveSharedQuizzes();
+      res.json({ shareId, url: `/exam/${shareId}` });
+    } catch (e: any) {
+      console.error('[share-quiz]', e.message);
+      res.status(500).json({
+        error: privateDetails(isOwnerRequest, e.message || String(e), 'تعذر إنشاء رابط المشاركة حالياً.'),
+      });
+    }
+  });
+
+  // ── Public sharing: read a shared quiz without login ────────────
+  app.get('/api/shared-quiz/:shareId', (req: any, res: any) => {
+    const shareId = String(req.params.shareId || '');
+    const shared = sharedQuizStore.get(shareId);
+    if (!shared) return res.status(404).json({ error: 'shared quiz not found' });
+
+    res.json({
+      quiz: {
+        id: shared.shareId,
+        sourceQuizId: shared.quizId,
+        title: shared.title,
+        description: shared.description || '',
+        category: shared.category || 'General',
+        difficulty: shared.difficulty || 'medium',
+        timer: shared.timer,
+        questions: shared.questions,
+      },
+    });
+  });
+
   // ── Admin: get all visitors ─────────────────────────────────────
   app.get('/api/admin/visitors', async (req: any, res: any) => {
     try {
       const idToken = (req.headers.authorization || '').replace('Bearer ', '');
       if (!idToken) return res.status(401).json({ error: 'unauthorized' });
       const tokenUser = await verifyFirebaseToken(idToken);
-      if (!tokenUser || tokenUser.email !== ADMIN_EMAIL) {
+      if (!tokenUser || !(await tokenUserIsAdmin(tokenUser, idToken))) {
         return res.status(403).json({ error: 'forbidden' });
       }
       res.json({ visitors: Array.from(visitorStore.values()) });
@@ -411,14 +1207,17 @@ async function startServer() {
       if (profileData.uid !== tokenUser.uid) return res.status(403).json({ error: 'uid mismatch' });
 
       const now = new Date().toISOString();
+      const safeEmail = tokenUser.email || '';
+      const safeRole = safeEmail === ADMIN_EMAIL ? 'admin' : 'user';
 
       // Always save to local store first (guaranteed to work)
       userStore.set(profileData.uid, {
         uid: profileData.uid,
-        email: profileData.email || '',
+        email: safeEmail,
         displayName: profileData.displayName || '',
         photoURL: profileData.photoURL || null,
-        role: profileData.role || 'user',
+        role: safeRole,
+        plan: 'free',
         createdAt: now,
       });
       saveUsersStore();
@@ -427,10 +1226,10 @@ async function startServer() {
       // Also try Firestore REST (best-effort, don't block response)
       const fields: Record<string, any> = {
         uid:         { stringValue: profileData.uid },
-        email:       { stringValue: profileData.email || '' },
+        email:       { stringValue: safeEmail },
         displayName: { stringValue: profileData.displayName || '' },
         photoURL:    profileData.photoURL ? { stringValue: profileData.photoURL } : { nullValue: null },
-        role:        { stringValue: profileData.role || 'user' },
+        role:        { stringValue: safeRole },
         createdAt:   { timestampValue: now },
       };
 
@@ -456,15 +1255,57 @@ async function startServer() {
 
   // Health check route
   app.get('/api/health', (req, res) => {
-    const hasKey = !!process.env.GEMINI_API_KEY;
-    const keyPrefix = hasKey ? process.env.GEMINI_API_KEY?.substring(0, 5) : 'none';
+    const apiKey = getServerGeminiApiKey();
+    const hasKey = !!apiKey;
     res.json({ 
       status: 'ok', 
       message: 'Server is running', 
-      env: process.env.NODE_ENV,
       hasGeminiKey: hasKey,
-      keyPrefix: keyPrefix
     });
+  });
+
+  // AI generation routes
+  app.post('/api/generate-quiz', express.json({ limit: '10mb' }), async (req: any, res: any) => {
+    try {
+      const idToken = (req.headers.authorization || '').replace('Bearer ', '');
+      if (!idToken) return res.status(401).json({ error: 'unauthorized' });
+      const tokenUser = await verifyFirebaseToken(idToken);
+      if (!tokenUser) return res.status(401).json({ error: 'invalid token' });
+
+      const { content, image, numQuestions, language, difficulty, notes } = req.body || {};
+      if (!content && !image) {
+        return res.status(400).json({ error: 'content or image required' });
+      }
+
+      const quiz = await generateQuizFromContent({ content, image, numQuestions, language, difficulty, notes });
+      res.json(quiz);
+    } catch (e: any) {
+      console.error('[generate-quiz] error:', e?.message || e);
+      res.status(Number(e?.statusCode) || 500).json({ error: e?.message || 'Failed to generate quiz' });
+    }
+  });
+
+  app.post('/api/generate-mindmap', express.json({ limit: '10mb' }), async (req: any, res: any) => {
+    try {
+      const idToken = (req.headers.authorization || '').replace('Bearer ', '');
+      if (!idToken) return res.status(401).json({ error: 'unauthorized' });
+      const tokenUser = await verifyFirebaseToken(idToken);
+      if (!tokenUser) return res.status(401).json({ error: 'invalid token' });
+
+      const { topic, content, filename } = req.body || {};
+      if (typeof topic === 'string' && topic.trim().length > 0) {
+        const mapData = await generateMindMap(topic.trim());
+        return res.json(mapData);
+      }
+      if (typeof content === 'string' && content.trim().length > 0) {
+        const mapData = await generateMindMapFromContent(content, filename);
+        return res.json(mapData);
+      }
+      res.status(400).json({ error: 'topic or content required' });
+    } catch (e: any) {
+      console.error('[generate-mindmap] error:', e?.message || e);
+      res.status(Number(e?.statusCode) || 500).json({ error: e?.message || 'Failed to generate mind map' });
+    }
   });
 
   // API Routes
@@ -474,12 +1315,15 @@ async function startServer() {
     console.log('--- NEW PARSE REQUEST ---');
     console.log('Method:', req.method);
     console.log('URL:', req.url);
-    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    const safeHeaders = { ...req.headers, authorization: req.headers.authorization ? '[redacted]' : undefined };
+    console.log('Headers:', JSON.stringify(safeHeaders, null, 2));
     console.log('File:', req.file ? `${req.file.originalname} (${req.file.mimetype})` : 'NO FILE');
+    let isOwnerRequest = false;
     
     try {
+      isOwnerRequest = await requestIsOwner(req);
       if (!req.file) {
-        return res.status(400).json({ error: 'No file uploaded' });
+        return res.status(400).json({ error: 'No file uploaded', details: 'لم يتم رفع أي ملف.' });
       }
 
       const { mimetype, buffer, originalname } = req.file;
@@ -487,34 +1331,73 @@ async function startServer() {
       console.log(`Processing file: ${originalname}, size: ${buffer.length} bytes, type: ${mimetype}`);
       console.log('Buffer preview (hex):', buffer.slice(0, 20).toString('hex'));
       let text = '';
+      let extractionMethod = 'unknown';
+      let usedOcr = false;
+      let allowUtf8Fallback = true;
+      const diagnostics: ExtractionDiagnostics = {};
 
-      // ── Image files → Gemini OCR directly ─────────────────────
+      // Images and scanned pages use specialized OCR libraries first.
       const isImage = IMAGE_MIME_TYPES.has(mimetype) ||
-        ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff'].some(e => lowerName.endsWith(e));
+        ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tif', '.tiff'].some(e => lowerName.endsWith(e));
 
       if (isImage) {
-        console.log('Image file detected — sending to Gemini OCR directly...');
+        console.log('Image file detected - running specialized OCR libraries...');
         const imageMime = mimetype.startsWith('image/') ? mimetype : `image/${lowerName.split('.').pop()}`;
-        text = await extractWithGeminiOcr(buffer, imageMime);
+        usedOcr = true;
+        allowUtf8Fallback = false;
+        const ocr = await extractWithBestOcr(buffer, imageMime, 'image');
+        extractionMethod = ocr.method;
+        text = ocr.text;
       } else if (mimetype === 'application/pdf' || lowerName.endsWith('.pdf')) {
         console.log('Parsing PDF...');
+        extractionMethod = 'pdf-parser';
+        allowUtf8Fallback = false;
         try {
           const data = await pdfParser(buffer);
           text = data?.text || '';
           console.log('PDF extraction result length:', text.length);
           if (text.trim().length < 100) {
-            console.log('PDF text too short — likely scanned. Falling back to Gemini OCR...');
-            const ocrText = await extractWithGeminiOcr(buffer, 'application/pdf');
-            if (ocrText.length > text.trim().length) {
-              text = ocrText;
-              console.log('Gemini OCR improved result:', text.length, 'chars');
+            console.log('PDF text too short — likely scanned. Rendering pages to images for OCR...');
+            const imageOcr = await extractPdfImageOcr(buffer);
+            diagnostics.renderedPdfPages = imageOcr.pageCount;
+            diagnostics.ocrPdfPages = imageOcr.ocrPageCount;
+            diagnostics.ocrChars = imageOcr.ocrChars;
+
+            if (imageOcr.text.length > text.trim().length) {
+              text = imageOcr.text;
+              extractionMethod = imageOcr.method || 'gemini-ocr-pdf-images';
+              usedOcr = true;
+              console.log('PDF image OCR improved result:', text.length, 'chars');
+            } else if (ALLOW_GEMINI_OCR_FALLBACK) {
+              console.log('PDF image OCR did not extract enough text. Trying optional Gemini PDF OCR fallback...');
+              const ocrText = await extractWithGeminiOcr(buffer, 'application/pdf');
+              if (ocrText.length > text.trim().length) {
+                text = ocrText;
+                extractionMethod = 'gemini-ocr-pdf';
+                usedOcr = true;
+                console.log('Optional Gemini PDF OCR improved result:', text.length, 'chars');
+              }
             }
           }
         } catch (err: any) {
-          console.error('PDF Parse failed — trying Gemini OCR:', err?.message);
-          text = await extractWithGeminiOcr(buffer, 'application/pdf');
-          if (!text) {
-            text = buffer.toString('utf-8').replace(/[^\x20-\x7E\s]/g, '');
+          console.error('PDF Parse failed — rendering pages to images for OCR:', err?.message);
+          const imageOcr = await extractPdfImageOcr(buffer);
+          diagnostics.renderedPdfPages = imageOcr.pageCount;
+          diagnostics.ocrPdfPages = imageOcr.ocrPageCount;
+          diagnostics.ocrChars = imageOcr.ocrChars;
+
+          if (imageOcr.text) {
+            text = imageOcr.text;
+            extractionMethod = imageOcr.method || 'gemini-ocr-pdf-images';
+            usedOcr = true;
+          } else if (ALLOW_GEMINI_OCR_FALLBACK) {
+            extractionMethod = 'gemini-ocr-pdf';
+            text = await extractWithGeminiOcr(buffer, 'application/pdf');
+            usedOcr = !!text;
+          } else {
+            extractionMethod = imageOcr.method || 'local-ocr-failed';
+            text = '';
+            usedOcr = true;
           }
         }
       } else if (
@@ -529,6 +1412,8 @@ async function startServer() {
         originalname.toLowerCase().endsWith('.xlsx') || originalname.toLowerCase().endsWith('.xls')
       ) {
         console.log('Parsing Office document:', mimetype || originalname);
+        extractionMethod = 'office-parser';
+        allowUtf8Fallback = false;
         try {
           // Special handling for .docx which mammoth handles better
           if (originalname.toLowerCase().endsWith('.docx')) {
@@ -536,6 +1421,7 @@ async function startServer() {
               console.log('Using mammoth for .docx');
               const result = await mammoth.extractRawText({ buffer });
               text = result.value;
+              if (text) extractionMethod = 'mammoth-docx';
             } catch (mErr) {
               console.error('Mammoth failed, falling back to officeParser:', mErr);
             }
@@ -546,7 +1432,7 @@ async function startServer() {
             try {
               // Wrap officeParser in a try-catch to handle its internal errors gracefully
               const extracted = await officeParser.parseOffice(buffer);
-              text = typeof extracted === 'string' ? extracted : (extracted?.text || JSON.stringify(extracted));
+              text = extractMeaningfulOfficeText(extracted);
             } catch (pErr: any) {
               const errMsg = pErr?.message || String(pErr);
               console.log('Office promise API failed or unsupported format:', errMsg);
@@ -565,7 +1451,7 @@ async function startServer() {
                     officeParser.parseOffice(buffer, (data: any, err: any) => {
                       clearTimeout(timeout);
                       if (err) reject(err);
-                      else resolve(typeof data === 'string' ? data : (data?.text || JSON.stringify(data)));
+                      else resolve(extractMeaningfulOfficeText(data));
                     });
                   });
                 } catch (cbErr) {
@@ -576,18 +1462,52 @@ async function startServer() {
               }
             }
           }
+
+          const isPresentation = lowerName.endsWith('.pptx') || lowerName.endsWith('.ppt') ||
+            mimetype === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
+            mimetype === 'application/vnd.ms-powerpoint';
+          const isTechnicalDump = looksLikeTechnicalOfficeDump(text);
+          const embeddedImageCount = isPresentation ? (await getOfficeImageEntries(buffer)).length : 0;
+          const shouldOcrOfficeImages = isPresentation && embeddedImageCount > 0 &&
+            (isTechnicalDump || text.trim().length < 1200 || embeddedImageCount >= 3);
+
+          if (!text || isTechnicalDump || shouldOcrOfficeImages) {
+            console.log(`Office parser returned ${text?.length || 0} chars and ${embeddedImageCount} embedded images. Trying OCR on embedded images...`);
+            const officeOcr = await extractOfficeImageOcr(buffer);
+            diagnostics.embeddedImageCount = officeOcr.imageCount;
+            diagnostics.ocrImageCount = officeOcr.ocrImageCount;
+            diagnostics.ocrChars = officeOcr.ocrChars;
+            if (officeOcr.quotaExhausted) {
+              diagnostics.note = 'OCR quota was exhausted after partial Office image extraction.';
+            }
+
+            if (officeOcr.text) {
+              const existingText = isTechnicalDump ? '' : text.trim();
+              text = [existingText, officeOcr.text].filter(Boolean).join('\n\n');
+              extractionMethod = officeOcr.method || 'gemini-ocr-office-images';
+              usedOcr = true;
+            } else if (isTechnicalDump) {
+              text = '';
+              diagnostics.note = 'Embedded images were found, but OCR returned no readable text.';
+            }
+          }
           
           console.log('Office extraction result length:', text?.length || 0);
         } catch (err: any) {
           console.error('Office document parse block failed:', err);
+          if (err?.statusCode) {
+            throw err;
+          }
         }
       } else if (mimetype === 'text/csv' || originalname.toLowerCase().endsWith('.csv')) {
         console.log('Parsing CSV...');
+        extractionMethod = 'csv-parser';
         try {
-          const records = csvParse(buffer.toString());
-          text = JSON.stringify(records);
+          const records = csvParse(buffer.toString(), { skip_empty_lines: true });
+          text = formatCsvRecordsForPreview(records);
         } catch (err: any) {
           console.error('CSV Parse failed:', err);
+          extractionMethod = 'utf8-fallback';
           text = buffer.toString();
         }
       } else if (
@@ -607,10 +1527,12 @@ async function startServer() {
         originalname.endsWith('.json')
       ) {
         console.log('Parsing plain text or code file...');
+        extractionMethod = 'plain-text';
         text = buffer.toString('utf-8');
       } else {
         // Generic fallback for unknown types - try as text
         console.log('Unknown mimetype, trying as plain text:', mimetype);
+        extractionMethod = 'utf8-fallback';
         text = buffer.toString('utf-8');
       }
 
@@ -619,36 +1541,86 @@ async function startServer() {
         text = String(text || '');
       }
       
-      if (!text || text.length < 10 || text === '[object Object]') {
+      if (looksLikeTechnicalOfficeDump(text)) {
+        text = '';
+      }
+
+      if (allowUtf8Fallback && (!text || text.length < 10 || text === '[object Object]')) {
         console.log('All parsers failed, trying final UTF-8 fallback...');
+        extractionMethod = 'utf8-fallback';
+        usedOcr = false;
         text = buffer.toString('utf-8').replace(/[^\x20-\x7E\s\u0600-\u06FF]/g, ''); // Keep Arabic characters too
       }
 
-      text = text.replace(/\s+/g, ' ').trim();
+      text = normalizeExtractedFileText(text);
       
       if (!text || text.length < 10 || text === '[object Object]') {
         console.error('Extraction failed or resulted in too little text. Length:', text?.length);
+        const diagnosticMessage = diagnostics.embeddedImageCount !== undefined
+          ? ` Found ${diagnostics.embeddedImageCount} embedded images; OCR read ${diagnostics.ocrChars || 0} characters from ${diagnostics.ocrImageCount || 0} images.`
+          : diagnostics.renderedPdfPages !== undefined
+            ? ` Rendered ${diagnostics.renderedPdfPages} PDF pages; OCR read ${diagnostics.ocrChars || 0} characters from ${diagnostics.ocrPdfPages || 0} pages.`
+          : '';
+        const ownerDetails = `Detected type: ${mimetype}, Size: ${buffer.length} bytes, Extracted length: ${text?.length || 0}.${diagnosticMessage} The file might be empty, encrypted, image-only, or too low-resolution for OCR.`;
         return res.status(400).json({ 
           error: 'Could not extract meaningful text from this file.',
-          details: `Detected type: ${mimetype}, Size: ${buffer.length} bytes, Extracted length: ${text?.length || 0}. The file might be empty, encrypted, or in an unsupported format.`
+          details: privateDetails(
+            isOwnerRequest,
+            ownerDetails,
+            'تعذر استخراج نص واضح من الملف. جرّب ملفاً نصياً أو صورة أوضح، ثم حاول مرة أخرى.'
+          )
         });
       }
 
       console.log('Successfully extracted text, length:', text.length);
-      res.json({ text: text.substring(0, 100000) }); // Increased limit to 100k
+      res.json({
+        text: text.substring(0, 100000),
+        extraction: {
+          method: extractionMethod,
+          usedOcr,
+          length: text.length,
+          returnedLength: Math.min(text.length, 100000),
+          originalName: originalname,
+          mimeType: mimetype,
+          diagnostics,
+        },
+      }); // Increased limit to 100k
     } catch (error: any) {
       console.error('Parsing error details:', error);
-      res.status(500).json({ 
-        error: 'Failed to parse file', 
-        details: error.message || String(error)
+      const statusCode = Number(error?.statusCode) || 500;
+      res.status(statusCode).json({
+        error: statusCode === 429 ? 'AI quota exceeded' : 'Failed to parse file',
+        details: privateDetails(
+          isOwnerRequest,
+          error.message || String(error),
+          error?.publicMessage || 'حدث خطأ أثناء معالجة الملف. حاول مرة أخرى لاحقاً.'
+        )
       });
     }
   });
 
   // Global error handler to ensure JSON is always returned for API routes
-  app.use('/api', (err: any, req: any, res: any, next: any) => {
+  app.use('/api', async (err: any, req: any, res: any, next: any) => {
     console.error('API Error:', err);
-    res.status(500).json({ error: 'Internal Server Error', details: err.message });
+    const isOwnerRequest = await requestIsOwner(req).catch(() => false);
+    if (err?.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({
+        error: 'File too large',
+        details: privateDetails(
+          isOwnerRequest,
+          `Maximum upload size is ${Math.round(MAX_UPLOAD_SIZE_BYTES / (1024 * 1024))} MB.`,
+          'حجم الملف أكبر من الحد المسموح.'
+        ),
+      });
+    }
+    res.status(500).json({
+      error: 'Internal Server Error',
+      details: privateDetails(
+        isOwnerRequest,
+        err.message || String(err),
+        'حدث خطأ داخلي. حاول مرة أخرى لاحقاً.'
+      ),
+    });
   });
 
   console.log(`Server starting in ${isProduction ? 'production' : 'development'} mode`);

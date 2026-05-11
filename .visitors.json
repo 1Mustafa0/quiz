@@ -9,24 +9,24 @@
   "1ae9056a-6869-4472-a022-503253d80597": {
     "sessionId": "1ae9056a-6869-4472-a022-503253d80597",
     "firstVisit": 1778265633916,
-    "lastVisit": 1778266039899,
-    "visitCount": 15,
+    "lastVisit": 1778450295468,
+    "visitCount": 44,
     "isRegistered": true,
     "uid": "gsU8IdYVsxgHdwdbsmDVh1ClzO92"
   },
   "8c328277-1029-4fcc-86f1-316e5e3ca899": {
     "sessionId": "8c328277-1029-4fcc-86f1-316e5e3ca899",
     "firstVisit": 1778265727181,
-    "lastVisit": 1778332334317,
-    "visitCount": 20,
+    "lastVisit": 1778454211504,
+    "visitCount": 52,
     "isRegistered": true,
     "uid": "gsU8IdYVsxgHdwdbsmDVh1ClzO92"
   },
   "80c74630-aaf6-4f88-89a3-96eb67c87d12": {
     "sessionId": "80c74630-aaf6-4f88-89a3-96eb67c87d12",
     "firstVisit": 1778267842605,
-    "lastVisit": 1778279044055,
-    "visitCount": 4,
+    "lastVisit": 1778488518903,
+    "visitCount": 8,
     "isRegistered": false
   },
   "dd23cc30-ed9f-4eac-be24-eba1f89cd3c3": {
@@ -41,6 +41,43 @@
     "firstVisit": 1778333008490,
     "lastVisit": 1778333074234,
     "visitCount": 4,
+    "isRegistered": false
+  },
+  "bc7298bc-bb66-4970-a0a5-3ae3121cb9d5": {
+    "sessionId": "bc7298bc-bb66-4970-a0a5-3ae3121cb9d5",
+    "firstVisit": 1778340273837,
+    "lastVisit": 1778340273842,
+    "visitCount": 2,
+    "isRegistered": false
+  },
+  "844b83aa-1995-4eac-b4c2-c01b23ec9b73": {
+    "sessionId": "844b83aa-1995-4eac-b4c2-c01b23ec9b73",
+    "firstVisit": 1778412700529,
+    "lastVisit": 1778412752666,
+    "visitCount": 3,
+    "isRegistered": true,
+    "uid": "S9c5bF5W88UApBqP95rnPGFCCNR2"
+  },
+  "26f6d0a5-b650-46b6-a3f4-cceabb21baae": {
+    "sessionId": "26f6d0a5-b650-46b6-a3f4-cceabb21baae",
+    "firstVisit": 1778492908849,
+    "lastVisit": 1778534548213,
+    "visitCount": 183,
+    "isRegistered": true,
+    "uid": "gsU8IdYVsxgHdwdbsmDVh1ClzO92"
+  },
+  "f3fe714c-3621-4f22-a643-3f1efda767c9": {
+    "sessionId": "f3fe714c-3621-4f22-a643-3f1efda767c9",
+    "firstVisit": 1778531696514,
+    "lastVisit": 1778531696586,
+    "visitCount": 2,
+    "isRegistered": false
+  },
+  "843107df-28a0-4686-97c7-87c44f2c7303": {
+    "sessionId": "843107df-28a0-4686-97c7-87c44f2c7303",
+    "firstVisit": 1778531705944,
+    "lastVisit": 1778531705949,
+    "visitCount": 2,
     "isRegistered": false
   }
 }

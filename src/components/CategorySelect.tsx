@@ -1,7 +1,15 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { db } from '../firebase';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { collection, getDocs, query, where } from 'firebase/firestore';
-import { Tag, X, ChevronDown } from 'lucide-react';
+import { ChevronDown, Search, Tag, X } from 'lucide-react';
+import { useAuth } from '../AuthContext';
+import { db } from '../firebase';
+import {
+  categoryMatchesSearch,
+  getCategoryTone,
+  normalizeCategory,
+  normalizeForCompare,
+  sortCategories,
+} from '../utils/categories';
 
 interface Props {
   value: string;
@@ -10,57 +18,91 @@ interface Props {
   placeholder?: string;
 }
 
-const PRESET_CATEGORIES = [
-  'علوم', 'رياضيات', 'تاريخ', 'جغرافيا', 'لغة عربية', 'لغة إنجليزية',
-  'أحياء', 'كيمياء', 'فيزياء', 'دين', 'برمجة', 'فنون', 'اقتصاد',
-  'فلسفة', 'أدب', 'طب', 'قانون', 'هندسة', 'General',
-];
-
-const CategorySelect: React.FC<Props> = ({ value, onChange, sourceType = 'all', placeholder = 'اختر أو اكتب تصنيفاً...' }) => {
+const CategorySelect: React.FC<Props> = ({
+  value,
+  onChange,
+  sourceType = 'all',
+  placeholder = 'اكتب تصنيفاً اختيارياً...',
+}) => {
+  const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [dbCategories, setDbCategories] = useState<string[]>([]);
+  const [loadingCategories, setLoadingCategories] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const fetch = async () => {
+    let cancelled = false;
+
+    const fetchCategories = async () => {
+      if (!user) {
+        setDbCategories([]);
+        return;
+      }
+
+      setLoadingCategories(true);
       const cats = new Set<string>();
+
+      const readCategories = async (collectionName: 'quizzes' | 'mindmaps') => {
+        const snap = await getDocs(query(collection(db, collectionName), where('authorUid', '==', user.uid)));
+        snap.forEach((docSnap) => {
+          const category = normalizeCategory(docSnap.data().category);
+          if (category) cats.add(category);
+        });
+      };
+
       try {
-        if (sourceType !== 'mindmap') {
-          const snap = await getDocs(collection(db, 'quizzes'));
-          snap.forEach(d => { if (d.data().category) cats.add(d.data().category); });
+        const reads: Array<Promise<void>> = [];
+        if (sourceType !== 'mindmap') reads.push(readCategories('quizzes'));
+        if (sourceType !== 'quiz') reads.push(readCategories('mindmaps'));
+        await Promise.all(reads);
+      } catch (error) {
+        console.warn('[CategorySelect] failed to load categories:', error);
+      } finally {
+        if (!cancelled) {
+          setDbCategories(sortCategories(Array.from(cats)));
+          setLoadingCategories(false);
         }
-        if (sourceType !== 'quiz') {
-          const snap = await getDocs(collection(db, 'mindmaps'));
-          snap.forEach(d => { if (d.data().category) cats.add(d.data().category); });
-        }
-      } catch {}
-      setDbCategories(Array.from(cats));
+      }
     };
-    fetch();
-  }, [sourceType]);
+
+    fetchCategories();
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceType, user]);
 
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    const handler = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  const allCategories = Array.from(new Set([...PRESET_CATEGORIES, ...dbCategories]));
-  const filtered = allCategories.filter(c =>
-    c.toLowerCase().includes(search.toLowerCase()) && c !== value
+  const selectedCategory = value ? normalizeCategory(value) : '';
+  const allCategories = useMemo(
+    () => sortCategories(dbCategories),
+    [dbCategories]
   );
 
-  const select = (cat: string) => {
-    onChange(cat);
+  const filtered = allCategories.filter((category) =>
+    category !== selectedCategory && categoryMatchesSearch(category, search)
+  );
+
+  const normalizedSearch = search.trim() ? normalizeCategory(search) : '';
+  const canCreate =
+    Boolean(search.trim()) &&
+    !allCategories.some((category) => normalizeForCompare(category) === normalizeForCompare(normalizedSearch));
+
+  const select = (category: string) => {
+    onChange(normalizeCategory(category));
     setSearch('');
     setOpen(false);
   };
 
-  const clear = (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const clear = (event: React.MouseEvent) => {
+    event.stopPropagation();
     onChange('');
     setSearch('');
   };
@@ -68,62 +110,87 @@ const CategorySelect: React.FC<Props> = ({ value, onChange, sourceType = 'all', 
   return (
     <div ref={ref} className="relative">
       <div
-        className="flex items-center w-full px-3 py-2 border border-gray-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 cursor-pointer hover:border-indigo-400 transition-colors"
-        onClick={() => setOpen(o => !o)}
+        role="button"
+        tabIndex={0}
+        className="flex w-full items-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-left transition-colors hover:border-indigo-400 dark:border-slate-600 dark:bg-slate-700"
+        onClick={() => setOpen((current) => !current)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') setOpen((current) => !current);
+        }}
       >
-        <Tag className="w-4 h-4 text-gray-400 dark:text-slate-400 flex-shrink-0 mr-2" />
-        {value ? (
-          <div className="flex items-center flex-1 gap-2 min-w-0">
-            <span className="inline-flex items-center px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full text-xs font-semibold truncate">
-              {value}
+        <Tag className="mr-2 h-4 w-4 flex-shrink-0 text-gray-400 dark:text-slate-400" />
+        {selectedCategory ? (
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <span
+              className={`inline-flex min-w-0 items-center rounded-full px-2 py-0.5 text-xs font-semibold ${getCategoryTone(selectedCategory)}`}
+              dir="auto"
+            >
+              <span className="truncate">{selectedCategory}</span>
             </span>
-            <button onClick={clear} className="p-0.5 text-gray-400 hover:text-red-500 rounded flex-shrink-0">
-              <X className="w-3 h-3" />
+            <button
+              type="button"
+              onClick={clear}
+              className="flex-shrink-0 rounded p-0.5 text-gray-400 hover:text-red-500"
+              aria-label="Clear category"
+            >
+              <X className="h-3 w-3" />
             </button>
           </div>
         ) : (
-          <span className="flex-1 text-gray-400 dark:text-slate-400 text-sm truncate">{placeholder}</span>
+          <span className="flex-1 truncate text-sm text-gray-400 dark:text-slate-400">{placeholder}</span>
         )}
-        <ChevronDown className={`w-4 h-4 text-gray-400 flex-shrink-0 ml-1 transition-transform ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown className={`ml-1 h-4 w-4 flex-shrink-0 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />
       </div>
 
       {open && (
-        <div className="absolute z-50 mt-1 w-full bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-xl shadow-xl overflow-hidden">
-          <div className="p-2 border-b border-gray-100 dark:border-slate-700">
-            <input
-              autoFocus
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && search.trim()) { select(search.trim()); }
-                if (e.key === 'Escape') setOpen(false);
-              }}
-              placeholder="ابحث أو أضف تصنيفاً جديداً..."
-              className="w-full px-3 py-1.5 text-sm bg-gray-50 dark:bg-slate-700 border border-gray-200 dark:border-slate-600 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 text-gray-900 dark:text-white placeholder-gray-400"
-            />
+        <div className="absolute z-50 mt-2 w-full overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl dark:border-slate-600 dark:bg-slate-800">
+          <div className="border-b border-gray-100 p-2 dark:border-slate-700">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+              <input
+                autoFocus
+                type="text"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && search.trim()) select(search.trim());
+                  if (event.key === 'Escape') setOpen(false);
+                }}
+                placeholder="ابحث أو أضف تصنيفاً جديداً..."
+                className="w-full rounded-lg border border-gray-200 bg-gray-50 py-2 pl-9 pr-3 text-sm text-gray-900 outline-none transition-all placeholder:text-gray-400 focus:ring-2 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+              />
+            </div>
           </div>
 
-          <div className="max-h-52 overflow-y-auto">
-            {search.trim() && !allCategories.some(c => c.toLowerCase() === search.toLowerCase()) && (
+          <div className="max-h-64 overflow-y-auto p-1">
+            {canCreate && (
               <button
+                type="button"
                 onClick={() => select(search.trim())}
-                className="w-full text-left px-4 py-2.5 text-sm text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 flex items-center gap-2 font-medium"
+                className="mb-1 flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold text-indigo-700 transition-colors hover:bg-indigo-50 dark:text-indigo-300 dark:hover:bg-indigo-900/30"
               >
-                <Tag className="w-3.5 h-3.5" />
-                إضافة "{search.trim()}"
+                <Tag className="h-4 w-4" />
+                <span dir="auto">إضافة "{search.trim()}"</span>
               </button>
             )}
-            {filtered.length === 0 && !search.trim() && (
-              <p className="px-4 py-3 text-sm text-gray-400 dark:text-slate-500 text-center">لا توجد تصنيفات أخرى</p>
+
+            {loadingCategories && (
+              <p className="px-3 py-2 text-center text-xs text-gray-400 dark:text-slate-500">جار تحميل تصنيفاتك...</p>
             )}
-            {filtered.map(cat => (
+
+            {filtered.length === 0 && !canCreate && !loadingCategories && (
+              <p className="px-3 py-3 text-center text-sm text-gray-400 dark:text-slate-500">لا توجد تصنيفات مطابقة</p>
+            )}
+
+            {filtered.map((category) => (
               <button
-                key={cat}
-                onClick={() => select(cat)}
-                className="w-full text-left px-4 py-2.5 text-sm text-gray-700 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 hover:text-indigo-700 dark:hover:text-indigo-300 transition-colors"
+                key={category}
+                type="button"
+                onClick={() => select(category)}
+                className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-sm text-gray-700 transition-colors hover:bg-gray-50 dark:text-slate-300 dark:hover:bg-slate-700"
               >
-                {cat}
+                <span className="truncate" dir="auto">{category}</span>
+                <span className={`h-2.5 w-2.5 flex-shrink-0 rounded-full ${getCategoryTone(category).split(' ')[0]}`} />
               </button>
             ))}
           </div>

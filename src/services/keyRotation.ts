@@ -6,28 +6,32 @@ const getAllApiKeys = (): string[] => {
     if (k && !invalid.has(k.trim()) && !keys.includes(k.trim())) keys.push(k.trim());
   };
 
+  const readProcessEnv = (name: string): string | undefined => {
+    if (typeof process === 'undefined') return undefined;
+    return (process as any).env?.[name];
+  };
+
   // Primary keys (multiple accepted names)
-  addKey(process.env.GEMINI_API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY);
-  addKey(process.env.GOOGLE_API_KEY || (import.meta as any).env?.VITE_GOOGLE_API_KEY);
+  addKey((import.meta as any).env?.VITE_GEMINI_API_KEY || readProcessEnv('GEMINI_API_KEY'));
+  addKey((import.meta as any).env?.VITE_GOOGLE_API_KEY || readProcessEnv('GOOGLE_API_KEY'));
 
   // Indexed keys: GEMINI_API_KEY_1 ... GEMINI_API_KEY_10
   for (let i = 1; i <= 10; i++) {
     addKey(
-      process.env[`GEMINI_API_KEY_${i}`] || (import.meta as any).env?.[`VITE_GEMINI_API_KEY_${i}`]
+      (import.meta as any).env?.[`VITE_GEMINI_API_KEY_${i}`] || readProcessEnv(`GEMINI_API_KEY_${i}`)
     );
   }
 
   // Comma-separated list
-  const multi = process.env.GEMINI_API_KEYS || (import.meta as any).env?.VITE_GEMINI_API_KEYS || '';
+  const multi = (import.meta as any).env?.VITE_GEMINI_API_KEYS || readProcessEnv('GEMINI_API_KEYS') || '';
   if (multi) {
     multi.split(',').forEach((k: string) => addKey(k.trim()));
   }
 
-  // Numeric-named secrets: "1", "2", ... "10" (Replit auto-capture format)
-  for (let i = 1; i <= 10; i++) {
-    addKey(
-      process.env[String(i)] || (import.meta as any).env?.[`VITE_SECRET_${i}`]
-    );
+  // Numeric-named secrets collected by Vite config.
+  const numericMulti = (import.meta as any).env?.VITE_NUMERIC_SECRET_KEYS || readProcessEnv('NUMERIC_SECRET_KEYS') || '';
+  if (numericMulti) {
+    numericMulti.split(',').forEach((k: string) => addKey(k.trim()));
   }
 
   return keys;
