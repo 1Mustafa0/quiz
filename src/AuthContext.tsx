@@ -28,25 +28,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isQuizActive, setIsQuizActive] = useState(false);
   const [showWelcome, setShowWelcome] = useState(false);
 
-  const syncUserToServer = async (firebaseUser: any, userRole: string) => {
-    try {
-      const idToken = await firebaseUser.getIdToken();
-      await fetch('/api/user/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-        body: JSON.stringify({
-          uid: firebaseUser.uid,
-          email: firebaseUser.email || '',
-          displayName: firebaseUser.displayName || '',
-          photoURL: firebaseUser.photoURL || null,
-          role: userRole,
-        }),
-      });
-    } catch (e: any) {
-      console.warn('[AuthContext] syncUserToServer error:', e?.message);
-    }
-  };
-
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
@@ -54,61 +35,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         let userRole: string = isOwner ? 'admin' : 'user';
 
         try {
-          const [{ db }, { doc, getDoc, setDoc, updateDoc, Timestamp }] = await Promise.all([
+          const [{ db }, { doc, getDoc, setDoc, Timestamp }] = await Promise.all([
             import('./firebase'),
             import('firebase/firestore'),
           ]);
           const userRef = doc(db, 'users', firebaseUser.uid);
           const userDoc = await getDoc(userRef).catch(() => null);
+          const existingData = userDoc?.exists() ? userDoc.data() : null;
 
-          if (userDoc && userDoc.exists()) {
-            const data = userDoc.data();
-            userRole = isOwner ? 'admin' : (data.role || 'user');
+          userRole = isOwner ? 'admin' : (existingData?.role || 'user');
 
-            const updates: Record<string, string | null> = {};
-            if (firebaseUser.email && data.email !== firebaseUser.email) updates.email = firebaseUser.email;
-            if (firebaseUser.displayName && data.displayName !== firebaseUser.displayName) updates.displayName = firebaseUser.displayName;
-            if (data.photoURL !== (firebaseUser.photoURL || null)) updates.photoURL = firebaseUser.photoURL || null;
-            if (isOwner && data.role !== 'admin') updates.role = 'admin';
-            if (Object.keys(updates).length > 0) {
-              updateDoc(userRef, updates).catch(() => {});
-            }
-          } else {
-            const newProfile = {
-              uid: firebaseUser.uid,
-              email: firebaseUser.email || '',
-              displayName: firebaseUser.displayName || '',
-              photoURL: firebaseUser.photoURL || null,
-              role: userRole,
-              createdAt: Timestamp.now(),
-            };
+          await setDoc(userRef, {
+            uid: firebaseUser.uid,
+            email: firebaseUser.email || '',
+            displayName: firebaseUser.displayName || '',
+            photoURL: firebaseUser.photoURL || null,
+            role: userRole,
+            createdAt: existingData?.createdAt || Timestamp.now(),
+            lastLoginAt: Timestamp.now(),
+          }, { merge: true });
 
-            const firestoreOk = await setDoc(userRef, newProfile)
-              .then(() => true)
-              .catch((err) => {
-                console.warn('[AuthContext] Direct Firestore write failed:', err?.code, err?.message);
-                return false;
-              });
-
-            if (!firestoreOk) {
-              try {
-                const idToken = await firebaseUser.getIdToken();
-                await fetch('/api/user/ensure-profile', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-                  body: JSON.stringify({ profileData: { ...newProfile, createdAt: undefined } }),
-                });
-              } catch (fallbackErr: any) {
-                console.error('[AuthContext] Server fallback error:', fallbackErr?.message);
-              }
-            }
+          if (!existingData) {
             setShowWelcome(true);
           }
-        } catch (err) {
+        } catch (err: any) {
+          console.warn('[AuthContext] Firestore profile sync failed:', err?.code, err?.message);
           console.error('Auth profile error:', err);
         }
 
-        await syncUserToServer(firebaseUser, userRole);
         setRole(userRole);
       } else {
         setRole(null);
