@@ -60,3 +60,20 @@ The old `server.ts` Express server does not run automatically on Vercel static h
 - a separate backend host such as Render, Railway, or Fly.io.
 
 Current known API-dependent features include file parsing, Gemini quiz generation, mind-map generation, share links, health checks, and server-side visit tracking.
+
+## Search engine setup
+
+The app includes search metadata, `robots.txt`, `sitemap.xml`, and structured data for Google.
+
+After deployment:
+
+1. Open Google Search Console.
+2. Add the domain `https://aiqu.app/` or your final production domain.
+3. Choose the HTML file verification method.
+4. Download Google's verification HTML file.
+5. Replace `public/google-site-verification.html` with Google's file.
+6. Commit and push the file so Vercel deploys it.
+7. In Search Console, submit this sitemap:
+   `https://aiqu.app/sitemap.xml`
+
+If the final domain is not `https://aiqu.app`, set `VITE_SITE_URL` in Vercel to the final URL and rebuild.

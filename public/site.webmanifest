@@ -1,0 +1,13 @@
+{
+  "name": "AI Quiz Master",
+  "short_name": "AI Quiz",
+  "description": "صانع اختبارات وخرائط ذهنية باستخدام الذكاء الاصطناعي.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#4f46e5",
+  "lang": "ar",
+  "dir": "rtl",
+  "categories": ["education", "productivity"]
+}
