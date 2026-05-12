@@ -170,7 +170,7 @@ export default function App() {
   }, [user, role]);
 
   return (
-    <Router>
+    <Router basename={import.meta.env.BASE_URL}>
       <ScrollToTop />
       <Layout>
         <WelcomeModal

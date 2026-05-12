@@ -933,7 +933,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX
 
 async function startServer() {
   const app = express();
-  const PORT = 5000;
+  const PORT = Number(process.env.PORT || 5000);
 
   // Vite middleware for development
   const isProduction = process.env.NODE_ENV === 'production';

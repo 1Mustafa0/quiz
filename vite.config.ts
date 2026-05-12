@@ -32,6 +32,7 @@ export default defineConfig(({mode}) => {
   };
 
   return {
+    base: readEnv('VITE_BASE_PATH') || '/',
     plugins: [react(), tailwindcss()],
     define,
     resolve: {

@@ -1,4 +1,4 @@
-# Local OCR Setup
+اذا من هو # Local OCR Setup
 
 The app now separates responsibilities:
 
