@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { db } from '../firebase';
-import { deleteDoc, doc, updateDoc, Timestamp } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDocs, updateDoc, Timestamp } from 'firebase/firestore';
 import { Users, BookOpen, Trash2, Shield, ShieldAlert, Search, Mail, TrendingUp, UserPlus, Eye, UserCheck, RefreshCw, Globe, X, Clock, Check } from 'lucide-react';
 import { motion, AnimatePresence, type Variants } from 'motion/react';
 import { useAuth } from '../AuthContext';
@@ -125,33 +125,19 @@ const AdminDashboard: React.FC = () => {
     onConfirm: () => void; type: 'danger' | 'info' | 'warning';
   }>({ isOpen: false, title: '', message: '', onConfirm: () => {}, type: 'info' });
 
-  const getIdToken = React.useCallback(async () => {
-    if (!user) return null;
-    try { return await user.getIdToken(); } catch (e) {
-      console.error('[admin] getIdToken error:', e);
-      setAdminError('تعذر تأكيد جلسة الأدمن. أعد تسجيل الدخول ثم حاول مرة أخرى.');
-      return null;
-    }
-  }, [user]);
-
   const fetchUsers = React.useCallback(async () => {
-    const idToken = await getIdToken();
-    if (!idToken) return;
     try {
-      const res = await fetch('/api/admin/users', { headers: { Authorization: `Bearer ${idToken}` } });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `Users request failed (${res.status})`);
-      }
-      const data = await res.json();
-      const rawUsers = Array.isArray(data.users) ? data.users : [];
-      const list: UserProfile[] = rawUsers.map((u: any, index: number) => ({
-        uid: safeText(u.uid || u.id || u.localId, `unknown-user-${index}`),
-        email: safeText(u.email),
-        displayName: safeText(u.displayName || u.name),
-        role: safeText(u.role, 'user'),
-        createdAt: u.createdAt || null,
-      }));
+      const snapshot = await getDocs(collection(db, 'users'));
+      const list: UserProfile[] = snapshot.docs.map((userDoc, index) => {
+        const data = userDoc.data();
+        return {
+          uid: safeText(data.uid || userDoc.id, `unknown-user-${index}`),
+          email: safeText(data.email),
+          displayName: safeText(data.displayName || data.name),
+          role: safeText(data.role, 'user'),
+          createdAt: data.createdAt || null,
+        };
+      });
       setUsers(list);
       const todayMs = startOfDay().seconds * 1000;
       const weekMs = startOfWeek().seconds * 1000;
@@ -173,54 +159,41 @@ const AdminDashboard: React.FC = () => {
       console.error('[admin] fetchUsers error:', e.message);
       setAdminError('تعذر تحميل بيانات المستخدمين.');
     }
-  }, [getIdToken]);
+  }, []);
 
   const fetchQuizzes = React.useCallback(async () => {
-    const idToken = await getIdToken();
-    if (!idToken) return;
     try {
-      const res = await fetch('/api/admin/quizzes', { headers: { Authorization: `Bearer ${idToken}` } });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `Quizzes request failed (${res.status})`);
-      }
-      const data = await res.json();
-      const rawQuizzes = Array.isArray(data.quizzes) ? data.quizzes : [];
-      const qList: Quiz[] = rawQuizzes.map((q: any, index: number) => ({
-        id: safeText(q.id || q.docId, `quiz-${index}`),
-        title: safeText(q.title, 'Untitled quiz'),
-        authorUid: safeText(q.authorUid || q.uid || q.ownerUid),
-        category: safeText(q.category),
-        createdAt: q.createdAt || null,
-      }));
+      const snapshot = await getDocs(collection(db, 'quizzes'));
+      const qList: Quiz[] = snapshot.docs.map((quizDoc, index) => {
+        const data = quizDoc.data();
+        return {
+          id: safeText(quizDoc.id || data.docId, `quiz-${index}`),
+          title: safeText(data.title, 'Untitled quiz'),
+          authorUid: safeText(data.authorUid || data.uid || data.ownerUid),
+          category: safeText(data.category),
+          createdAt: data.createdAt || null,
+        };
+      });
       setQuizzes(qList);
       setAdminError(null);
     } catch (e: any) {
       console.error('[admin] fetchQuizzes error:', e.message);
       setAdminError('تعذر تحميل بيانات الكويزات.');
     }
-  }, [getIdToken]);
+  }, []);
 
   const fetchVisitors = React.useCallback(async () => {
-    const idToken = await getIdToken();
-    if (!idToken) return;
     try {
-      const res = await fetch('/api/admin/visitors', { headers: { Authorization: `Bearer ${idToken}` } });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        setVisitorsError(err.error || res.statusText);
-        return;
-      }
-      const data = await res.json();
-      const rawVisitors = Array.isArray(data.visitors) ? data.visitors : [];
-      const vList: VisitorDoc[] = rawVisitors.map((v: any, index: number) => {
-        const uid = safeText(v.uid);
+      const snapshot = await getDocs(collection(db, 'visitors'));
+      const vList: VisitorDoc[] = snapshot.docs.map((visitorDoc, index) => {
+        const data = visitorDoc.data();
+        const uid = safeText(data.uid);
         return {
-          sessionId: safeText(v.sessionId || v.id, `visitor-${index}`),
-          firstVisit: v.firstVisit ?? null,
-          lastVisit: v.lastVisit ?? v.firstVisit ?? null,
-          visitCount: Number(v.visitCount || 0),
-          isRegistered: Boolean(v.isRegistered || uid),
+          sessionId: safeText(data.sessionId || visitorDoc.id, `visitor-${index}`),
+          firstVisit: data.firstVisit ?? null,
+          lastVisit: data.lastVisit ?? data.firstVisit ?? null,
+          visitCount: Number(data.visitCount || 0),
+          isRegistered: Boolean(data.isRegistered || uid),
           ...(uid ? { uid } : {}),
         };
       });
@@ -238,7 +211,7 @@ const AdminDashboard: React.FC = () => {
       console.error('[admin] fetchVisitors error:', e.message);
       setVisitorsError(e.message);
     }
-  }, [getIdToken]);
+  }, []);
 
   useEffect(() => {
     if (role !== 'admin') return;
