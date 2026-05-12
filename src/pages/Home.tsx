@@ -96,18 +96,6 @@ const Home: React.FC = () => {
 
       {/* Hero Section */}
       <section className="relative text-center space-y-7 max-w-5xl mx-auto overflow-hidden px-1 sm:px-4">
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4 }}
-          className="mx-auto inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 shadow-sm dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300"
-          dir="rtl"
-        >
-          <span className="text-base leading-none">😊</span>
-          <span>متنساش تصلّي على النبي</span>
-          <span className="text-indigo-500">♥</span>
-        </motion.div>
-
         <motion.h1
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}

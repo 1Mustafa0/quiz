@@ -215,6 +215,14 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         </AnimatePresence>
       </nav>
 
+      <div className="border-b border-indigo-100 bg-indigo-50/80 px-4 py-2 text-center text-sm font-semibold text-indigo-700 dark:border-indigo-900/50 dark:bg-indigo-950/30 dark:text-indigo-300" dir="rtl">
+        <span className="inline-flex items-center justify-center gap-2">
+          <span className="text-base leading-none">😊</span>
+          <span>متنساش تصلّي على النبي</span>
+          <span className="text-indigo-500">♥</span>
+        </span>
+      </div>
+
       <AnimatePresence>
         {loginError && !user && (
           <motion.div
