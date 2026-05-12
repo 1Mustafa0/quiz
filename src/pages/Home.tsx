@@ -72,6 +72,25 @@ const Home: React.FC = () => {
     { label: 'Completely Free', icon: Star, desc: 'All features available with no limits or subscriptions' },
   ];
 
+  const searchTopics = [
+    {
+      title: 'صانع اختبارات بالذكاء الاصطناعي',
+      text: 'AI Quiz Master يساعدك على تحويل الدروس، الملخصات، والمحتوى التعليمي إلى كويزات منظمة تحتوي على أسئلة اختيار من متعدد، صح وخطأ، وأسئلة قصيرة.',
+    },
+    {
+      title: 'إنشاء أسئلة من PDF وWord',
+      text: 'يمكنك رفع ملفات PDF أو Word أو PowerPoint أو الصور، ثم استخراج الأفكار المهمة وتحويلها إلى اختبار جاهز للمراجعة أو المشاركة مع الطلاب.',
+    },
+    {
+      title: 'خرائط ذهنية للمذاكرة',
+      text: 'أنشئ خريطة ذهنية من أي موضوع لتلخيص المفاهيم والعلاقات بينها، وهي مفيدة للطلاب والمعلمين قبل الامتحانات أو أثناء شرح الدروس.',
+    },
+    {
+      title: 'مشاركة امتحان بدون تسجيل دخول',
+      text: 'بعد إنشاء الكويز يمكنك مشاركة رابط امتحان عام مع أي شخص، ويستطيع فتحه مباشرة من المتصفح دون الحاجة إلى إنشاء حساب.',
+    },
+  ];
+
   return (
     <div className="space-y-20 pb-20 mt-6 sm:mt-8">
 
@@ -251,6 +270,40 @@ const Home: React.FC = () => {
               <p className="text-xs text-gray-500 dark:text-slate-400 leading-relaxed">{cap.desc}</p>
             </motion.div>
           ))}
+        </div>
+      </section>
+
+      {/* Search-friendly Arabic content */}
+      <section className="space-y-8" aria-labelledby="seo-learning-tools">
+        <div className="text-center max-w-3xl mx-auto">
+          <h2 id="seo-learning-tools" className="text-3xl md:text-4xl font-extrabold text-gray-900 dark:text-white mb-3">
+            صانع اختبارات وخرائط ذهنية للطلاب والمعلمين
+          </h2>
+          <p className="text-gray-600 dark:text-slate-400 text-lg leading-relaxed">
+            استخدم AI Quiz Master لإنشاء اختبارات تعليمية من الملفات والنصوص، وتنظيم المذاكرة، ومشاركة الامتحانات بسهولة من أي جهاز.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          {searchTopics.map((topic) => (
+            <article
+              key={topic.title}
+              className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-100 dark:border-slate-700 p-6 shadow-sm"
+              dir="rtl"
+            >
+              <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-3">{topic.title}</h3>
+              <p className="text-gray-600 dark:text-slate-400 leading-relaxed">{topic.text}</p>
+            </article>
+          ))}
+        </div>
+
+        <div className="bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/50 rounded-2xl p-6 text-center" dir="rtl">
+          <h3 className="text-2xl font-extrabold text-gray-900 dark:text-white mb-3">
+            مناسب للمراجعة، التدريب، والاختبارات السريعة
+          </h3>
+          <p className="text-gray-600 dark:text-slate-400 max-w-3xl mx-auto leading-relaxed">
+            سواء كنت طالبًا يريد مراجعة درس، أو معلمًا يريد إنشاء امتحان سريع، أو صانع محتوى تعليمي يريد تحويل الشرح إلى أسئلة، يوفر لك التطبيق تجربة بسيطة لإنشاء كويز ومشاركته.
+          </p>
         </div>
       </section>
 
