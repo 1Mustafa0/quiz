@@ -247,8 +247,18 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       </main>
 
       <footer className="bg-white dark:bg-slate-800 border-t border-gray-200 dark:border-slate-700 py-8 transition-colors duration-300">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-gray-500 dark:text-slate-400 text-sm">
-          © 2026 Mostafa. All rights reserved.
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-gray-500 dark:text-slate-400 text-sm space-y-2">
+          <p>© 2026 Mostafa. All rights reserved.</p>
+          <p>
+            للتواصل:{' '}
+            <a
+              href="mailto:mstfyalswdany913@gmail.com"
+              className="font-semibold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300"
+              dir="ltr"
+            >
+              mstfyalswdany913@gmail.com
+            </a>
+          </p>
         </div>
       </footer>
 
