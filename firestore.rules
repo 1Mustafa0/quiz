@@ -92,6 +92,19 @@ service cloud.firestore {
     }
 
     // ── Results ───────────────────────────────────────────────────
+    match /sharedQuizzes/{shareId} {
+      allow read: if true;
+
+      allow create: if isAuthenticated() &&
+                    request.resource.data.ownerUid == request.auth.uid &&
+                    request.resource.data.sourceQuizId is string &&
+                    request.resource.data.title is string &&
+                    request.resource.data.questions is list;
+
+      allow update, delete: if isAuthenticated() &&
+                            (resource.data.ownerUid == request.auth.uid || isAdmin());
+    }
+
     match /results/{resultId} {
       allow read: if isAuthenticated() &&
                   (resource.data.userId == request.auth.uid || isAdmin());

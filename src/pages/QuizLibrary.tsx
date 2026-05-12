@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { collection, query, where, onSnapshot, deleteDoc, doc, orderBy } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, deleteDoc, doc, orderBy, setDoc, Timestamp } from 'firebase/firestore';
 import { Play, Trash2, Clock, BookOpen, BarChart, Search, Filter, Plus, Pencil, Share2, CheckCircle2, Download, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ConfirmModal from '../components/ConfirmModal';
@@ -91,19 +91,27 @@ const QuizLibrary: React.FC = () => {
     setShareMessage(null);
 
     try {
-      const idToken = await user.getIdToken();
-      const res = await fetch('/api/share-quiz', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({ quizId }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || 'Failed to create share link');
+      const quiz = quizzes.find((item) => item.id === quizId);
+      if (!quiz) throw new Error('Quiz not found');
+      if (!Array.isArray(quiz.questions) || quiz.questions.length === 0) {
+        throw new Error('Quiz has no questions');
+      }
 
-      const shareUrl = `${window.location.origin}${data.url}`;
+      const shareId = `${quizId.slice(0, 8)}-${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+      await setDoc(doc(db, 'sharedQuizzes', shareId), {
+        shareId,
+        sourceQuizId: quiz.id,
+        title: quiz.title || 'Shared Quiz',
+        description: quiz.description || '',
+        category: quiz.category || 'General',
+        difficulty: quiz.difficulty || 'medium',
+        timer: Number(quiz.timer || 0),
+        questions: quiz.questions,
+        ownerUid: user.uid,
+        createdAt: Timestamp.now(),
+      });
+
+      const shareUrl = `${window.location.origin}/exam/${shareId}`;
       try {
         await navigator.clipboard.writeText(shareUrl);
         setShareMessage('تم نسخ رابط الامتحان. يمكن فتحه بدون تسجيل دخول.');
@@ -114,12 +122,11 @@ const QuizLibrary: React.FC = () => {
       setTimeout(() => setShareMessage(null), 5000);
     } catch (err: any) {
       console.error('[QuizLibrary] share link failed:', err);
-      setShareMessage(ownerOnlyError(user, 'تعذر إنشاء رابط المشاركة حالياً. حاول مرة أخرى لاحقاً.', err));
+      setShareMessage(ownerOnlyError(user, 'تعذر إنشاء رابط المشاركة حاليا. حاول مرة أخرى لاحقا.', err));
     } finally {
       setSharingQuizId(null);
     }
   };
-
   const handleExportPdf = async (quiz: Quiz) => {
     setExportingQuizId(quiz.id);
     try {

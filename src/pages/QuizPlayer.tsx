@@ -107,12 +107,12 @@ const QuizPlayer: React.FC<QuizPlayerProps> = ({ publicMode = false }) => {
       if (!publicMode && !quizId) return;
       try {
         if (publicMode) {
-          const res = await fetch(`/api/shared-quiz/${shareId}`);
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) {
-            throw new Error(data?.error || 'Shared quiz not found');
+          const docRef = doc(db, 'sharedQuizzes', shareId!);
+          const docSnap = await getDoc(docRef);
+          if (!docSnap.exists()) {
+            throw new Error('Shared quiz not found');
           }
-          const sharedQuiz = data.quiz as Quiz;
+          const sharedQuiz = { id: docSnap.id, ...docSnap.data() } as Quiz;
           setQuiz(sharedQuiz);
           setUserAnswers(new Array(sharedQuiz.questions.length).fill(''));
           setTimeLeft((sharedQuiz.timer || 0) * 60);

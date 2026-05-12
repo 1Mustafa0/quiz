@@ -1257,7 +1257,7 @@ const QuizBuilder: React.FC = () => {
                           <textarea
                             value={notes}
                             onChange={(e) => setNotes(e.target.value)}
-                            placeholder="مثال: ركّز على الفصل الثالث فقط · تجاهل المقدمة · اجعل الأسئلة على التعريفات والمصطلحات..."
+                            placeholder="مثال: ركّز على الفصل الثالث فقط، أو تجاهل المقدمة، أو اجعل الأسئلة على التعريفات والمصطلحات..."
                             className="w-full px-4 py-3 border-t border-gray-100 bg-gray-50 text-sm focus:ring-2 focus:ring-indigo-400 outline-none resize-none h-24"
                             dir="auto"
                           />
@@ -1322,7 +1322,7 @@ const QuizBuilder: React.FC = () => {
                     <p className="text-sm text-gray-500 break-all">{extractedMeta.fileName}</p>
                     <p className="text-xs text-gray-400">
                       {getExtractionLabel(extractedMeta.method)}
-                      {extractedMeta.length > 0 && ` · ${extractedMeta.returnedLength.toLocaleString()} characters ready for quiz generation`}
+                      {extractedMeta.length > 0 && ` - ${extractedMeta.returnedLength.toLocaleString()} characters ready for quiz generation`}
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
