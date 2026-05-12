@@ -32,11 +32,17 @@ service cloud.firestore {
       allow get:  if isAuthenticated() && (isOwner(userId) || isAdmin());
 
       // New user creates their own profile on first sign-in (relaxed validation)
-      allow create: if isAuthenticated() && isOwner(userId) &&
-                    request.resource.data.uid == userId &&
-                    request.resource.data.role in ['admin', 'user'] &&
-                    request.resource.data.createdAt is timestamp &&
-                    (request.resource.data.role == 'user' || isSuperAdmin());
+      allow create: if (
+                      isAuthenticated() && isOwner(userId) &&
+                      request.resource.data.uid == userId &&
+                      request.resource.data.role in ['admin', 'user'] &&
+                      request.resource.data.createdAt is timestamp &&
+                      (request.resource.data.role == 'user' || isSuperAdmin())
+                    ) || (
+                      isAuthenticated() && isAdmin() &&
+                      request.resource.data.uid == userId &&
+                      request.resource.data.role in ['admin', 'user']
+                    );
 
       // User can update their own profile (role stays the same); admin can update anything
       allow update: if isAuthenticated() &&

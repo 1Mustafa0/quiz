@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { db } from '../firebase';
-import { collection, deleteDoc, doc, getDocs, updateDoc, Timestamp } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDocs, setDoc, updateDoc, Timestamp } from 'firebase/firestore';
 import { Users, BookOpen, Trash2, Shield, ShieldAlert, Search, Mail, TrendingUp, UserPlus, Eye, UserCheck, RefreshCw, Globe, X, Clock, Check } from 'lucide-react';
 import { motion, AnimatePresence, type Variants } from 'motion/react';
 import { useAuth } from '../AuthContext';
@@ -119,7 +119,9 @@ const AdminDashboard: React.FC = () => {
   const [visitorsError, setVisitorsError] = useState<string | null>(null);
   const [adminError, setAdminError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isImportingUsers, setIsImportingUsers] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const userImportInputRef = React.useRef<HTMLInputElement | null>(null);
   const [confirmConfig, setConfirmConfig] = useState<{
     isOpen: boolean; title: string; message: string;
     onConfirm: () => void; type: 'danger' | 'info' | 'warning';
@@ -406,6 +408,60 @@ const AdminDashboard: React.FC = () => {
     }
   };
 
+  const handleImportUsersFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    setIsImportingUsers(true);
+    try {
+      const raw = await file.text();
+      const parsed = JSON.parse(raw);
+      const records = Array.isArray(parsed) ? parsed : Object.values(parsed || {});
+      const validUsers = records
+        .map((record: any) => ({
+          uid: safeText(record?.uid),
+          email: safeText(record?.email),
+          displayName: safeText(record?.displayName || record?.name),
+          photoURL: record?.photoURL || null,
+          role: safeText(record?.role, 'user') === 'admin' ? 'admin' : 'user',
+          createdAt: record?.createdAt,
+        }))
+        .filter((record) => record.uid);
+
+      if (validUsers.length === 0) {
+        setAdminError('لم يتم العثور على مستخدمين صالحين داخل الملف.');
+        return;
+      }
+
+      await Promise.all(validUsers.map((record) => {
+        const createdDate = record.createdAt ? new Date(record.createdAt) : null;
+        const createdAt = createdDate && !Number.isNaN(createdDate.getTime())
+          ? Timestamp.fromDate(createdDate)
+          : Timestamp.now();
+
+        return setDoc(doc(db, 'users', record.uid), {
+          uid: record.uid,
+          email: record.email,
+          displayName: record.displayName,
+          photoURL: record.photoURL,
+          role: record.role,
+          createdAt,
+          restoredAt: Timestamp.now(),
+        }, { merge: true });
+      }));
+
+      await fetchUsers();
+      setLastUpdated(new Date());
+      setAdminError(`تم استرجاع ${validUsers.length} حساب قديم بنجاح.`);
+    } catch (error: any) {
+      console.error('[admin] import users error:', error);
+      setAdminError(`تعذر استيراد الحسابات القديمة: ${error?.message || 'خطأ غير معروف'}`);
+    } finally {
+      setIsImportingUsers(false);
+    }
+  };
+
   return (
     <div className="space-y-8">
       <motion.div variants={fadeUp} className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -424,16 +480,35 @@ const AdminDashboard: React.FC = () => {
             )}
           </p>
         </div>
-        <motion.button
-          onClick={handleRefreshAll}
-          disabled={isRefreshing}
-          whileHover={{ y: -1 }}
-          whileTap={{ scale: 0.98 }}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-xl text-sm font-medium text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors shadow-sm disabled:opacity-50"
-        >
-          <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-          تحديث البيانات
-        </motion.button>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            ref={userImportInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={handleImportUsersFile}
+          />
+          <motion.button
+            onClick={() => userImportInputRef.current?.click()}
+            disabled={isImportingUsers}
+            whileHover={{ y: -1 }}
+            whileTap={{ scale: 0.98 }}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 rounded-xl text-sm font-medium text-white hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50"
+          >
+            <UserPlus className="w-4 h-4" />
+            {isImportingUsers ? 'جار الاسترجاع...' : 'استرجاع الحسابات'}
+          </motion.button>
+          <motion.button
+            onClick={handleRefreshAll}
+            disabled={isRefreshing}
+            whileHover={{ y: -1 }}
+            whileTap={{ scale: 0.98 }}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-xl text-sm font-medium text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors shadow-sm disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+            تحديث البيانات
+          </motion.button>
+        </div>
       </motion.div>
 
       {adminError && (
