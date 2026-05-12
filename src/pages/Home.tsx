@@ -94,26 +94,33 @@ const Home: React.FC = () => {
   return (
     <div className="space-y-20 pb-20 mt-6 sm:mt-8">
 
-      {/* Personal Touch Banner */}
-      <div className="text-center py-2 animate-pulse">
-        <span className="text-xl sm:text-3xl font-bold text-indigo-500 dark:text-indigo-400 drop-shadow-sm font-amiri">
-          متنساش تصل على النبي ❤😊
-        </span>
-      </div>
-
       {/* Hero Section */}
-      <section className="relative text-center space-y-8 max-w-5xl mx-auto overflow-hidden">
-        <div className="absolute -top-20 left-1/2 -translate-x-1/2 w-[600px] h-[400px] bg-gradient-to-r from-indigo-200/40 to-purple-200/40 dark:from-indigo-900/20 dark:to-purple-900/20 rounded-full blur-3xl pointer-events-none" />
+      <section className="relative text-center space-y-7 max-w-5xl mx-auto overflow-hidden px-1 sm:px-4">
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4 }}
+          className="mx-auto inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 shadow-sm dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300"
+          dir="rtl"
+        >
+          <span className="text-base leading-none">😊</span>
+          <span>متنساش تصلّي على النبي</span>
+          <span className="text-indigo-500">♥</span>
+        </motion.div>
 
         <motion.h1
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.1 }}
-          className="relative text-5xl md:text-7xl font-extrabold text-gray-900 dark:text-white tracking-tight leading-tight"
+          className="relative mx-auto max-w-4xl text-balance text-[2.45rem] font-black leading-[1.08] text-gray-900 dark:text-white sm:text-5xl lg:text-6xl"
+          dir="ltr"
         >
-          Transform Your Content into{' '}
-          <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400">
+          <span className="block">Transform Your Content</span>
+          <span className="block">
+            into{' '}
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400">
             Interactive Quizzes
+            </span>
           </span>
         </motion.h1>
 
@@ -121,22 +128,23 @@ const Home: React.FC = () => {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.2 }}
-          className="relative text-xl text-gray-600 dark:text-slate-400 max-w-3xl mx-auto leading-relaxed"
+          className="relative mx-auto max-w-3xl text-base leading-8 text-gray-600 dark:text-slate-400 sm:text-lg"
+          dir="ltr"
         >
           The smartest tool for students and teachers. Upload any file and let AI instantly
-          generate a professional quiz — or build mind maps with just a few words.
+          generate a professional quiz or build mind maps with just a few words.
         </motion.p>
 
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.3 }}
-          className="relative flex flex-col sm:flex-row justify-center items-center gap-4 pt-2"
+          className="relative flex flex-col-reverse sm:flex-row justify-center items-center gap-4 pt-2"
         >
           {user ? (
             <Link
               to="/builder"
-              className="w-full sm:w-auto justify-center group inline-flex items-center gap-2 px-8 py-4 text-lg font-bold rounded-2xl text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 shadow-xl shadow-indigo-200/60 dark:shadow-indigo-900/30 hover:shadow-2xl transition-all transform hover:-translate-y-1"
+              className="w-full sm:w-auto min-w-[220px] justify-center group inline-flex items-center gap-2 px-7 py-4 text-base font-bold rounded-2xl text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 shadow-xl shadow-indigo-200/60 dark:shadow-indigo-900/30 hover:shadow-2xl transition-all transform hover:-translate-y-1"
             >
               <Sparkles className="w-5 h-5 group-hover:rotate-12 transition-transform" />
               Create a Quiz
@@ -147,7 +155,7 @@ const Home: React.FC = () => {
               onClick={handleLogin}
               disabled={loginLoading}
               aria-busy={loginLoading}
-              className="w-full sm:w-auto justify-center group inline-flex items-center gap-2 px-8 py-4 text-lg font-bold rounded-2xl text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:from-indigo-400 disabled:to-purple-400 disabled:cursor-not-allowed shadow-xl shadow-indigo-200/60 dark:shadow-indigo-900/30 hover:shadow-2xl transition-all transform hover:-translate-y-1 disabled:hover:translate-y-0"
+              className="w-full sm:w-auto min-w-[220px] justify-center group inline-flex items-center gap-2 px-7 py-4 text-base font-bold rounded-2xl text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:from-indigo-400 disabled:to-purple-400 disabled:cursor-not-allowed shadow-xl shadow-indigo-200/60 dark:shadow-indigo-900/30 hover:shadow-2xl transition-all transform hover:-translate-y-1 disabled:hover:translate-y-0"
             >
               {loginLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5 group-hover:rotate-12 transition-transform" />}
               {loginLoading ? 'Signing in...' : 'Get Started Free'}
@@ -156,7 +164,7 @@ const Home: React.FC = () => {
           )}
           <Link
             to="/library"
-            className="w-full sm:w-auto justify-center inline-flex items-center gap-2 px-8 py-4 text-lg font-semibold rounded-2xl text-gray-700 dark:text-slate-300 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 hover:bg-gray-50 dark:hover:bg-slate-700 shadow-md hover:shadow-lg transition-all transform hover:-translate-y-1"
+            className="w-full sm:w-auto min-w-[220px] justify-center inline-flex items-center gap-2 px-7 py-4 text-base font-semibold rounded-2xl text-gray-700 dark:text-slate-300 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 hover:bg-gray-50 dark:hover:bg-slate-700 shadow-md hover:shadow-lg transition-all transform hover:-translate-y-1"
           >
             <Library className="w-5 h-5" />
             Browse Quizzes
