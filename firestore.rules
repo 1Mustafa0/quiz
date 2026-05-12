@@ -41,7 +41,8 @@ service cloud.firestore {
                     ) || (
                       isAuthenticated() && isAdmin() &&
                       request.resource.data.uid == userId &&
-                      request.resource.data.role in ['admin', 'user']
+                      request.resource.data.role in ['admin', 'user'] &&
+                      (request.resource.data.role == 'user' || isSuperAdmin())
                     );
 
       // User can update their own profile (role stays the same); admin can update anything
@@ -50,10 +51,26 @@ service cloud.firestore {
                       (isOwner(userId) &&
                        request.resource.data.role == resource.data.role &&
                        request.resource.data.createdAt == resource.data.createdAt) ||
-                      isAdmin()
+                      (
+                        isAdmin() &&
+                        (
+                          isSuperAdmin() ||
+                          (
+                            userId != "gsU8IdYVsxgHdwdbsmDVh1ClzO92" &&
+                            resource.data.email != "mstfyalswdany913@gmail.com"
+                          )
+                        )
+                      )
                     );
 
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() &&
+                    (
+                      isSuperAdmin() ||
+                      (
+                        userId != "gsU8IdYVsxgHdwdbsmDVh1ClzO92" &&
+                        resource.data.email != "mstfyalswdany913@gmail.com"
+                      )
+                    );
     }
 
     // ── Quizzes ───────────────────────────────────────────────────

@@ -7,6 +7,7 @@ import { useAuth } from '../AuthContext';
 import { Navigate, Link } from 'react-router-dom';
 import ConfirmModal from '../components/ConfirmModal';
 import { getCategoryTone, normalizeCategory } from '../utils/categories';
+import { isOwnerEmail, OWNER_EMAIL, OWNER_UID } from '../utils/owner';
 
 interface UserProfile {
   uid: string;
@@ -120,8 +121,10 @@ const AdminDashboard: React.FC = () => {
   const [adminError, setAdminError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isImportingUsers, setIsImportingUsers] = useState(false);
+  const [isImportingVisitors, setIsImportingVisitors] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const userImportInputRef = React.useRef<HTMLInputElement | null>(null);
+  const visitorImportInputRef = React.useRef<HTMLInputElement | null>(null);
   const [confirmConfig, setConfirmConfig] = useState<{
     isOpen: boolean; title: string; message: string;
     onConfirm: () => void; type: 'danger' | 'info' | 'warning';
@@ -309,6 +312,12 @@ const AdminDashboard: React.FC = () => {
   };
 
   const toggleUserRole = (userId: string, currentRole: string) => {
+    const targetUser = users.find(u => u.uid === userId);
+    if (userId === OWNER_UID || isOwnerEmail(targetUser?.email)) {
+      setAdminError('لا يمكن تغيير صلاحية مالك الموقع.');
+      return;
+    }
+
     const newRole = currentRole === 'admin' ? 'user' : 'admin';
     setConfirmConfig({
       isOpen: true, title: 'تغيير رتبة المستخدم؟',
@@ -329,6 +338,13 @@ const AdminDashboard: React.FC = () => {
 
   const handleUpdateEmail = async () => {
     if (!editingUser || !newEmail) return;
+    if (editingUser.uid === OWNER_UID || isOwnerEmail(editingUser.email)) {
+      setAdminError('لا يمكن تعديل بريد مالك الموقع من لوحة الأدمن.');
+      setEditingUser(null);
+      setNewEmail('');
+      return;
+    }
+
     if (!newEmail.includes('@')) {
       setConfirmConfig({ isOpen: true, title: 'بريد غير صالح', message: 'يرجى إدخال عنوان بريد إلكتروني صالح.', type: 'warning', onConfirm: () => {} });
       return;
@@ -462,6 +478,82 @@ const AdminDashboard: React.FC = () => {
     }
   };
 
+  const handleImportVisitorsFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    setIsImportingVisitors(true);
+    try {
+      const raw = await file.text();
+      const parsed = JSON.parse(raw);
+      const records = Array.isArray(parsed) ? parsed : Object.values(parsed || {});
+      const validVisitors = records
+        .map((record: any) => ({
+          sessionId: safeText(record?.sessionId || record?.id),
+          firstVisit: Number(record?.firstVisit || record?.lastVisit || Date.now()),
+          lastVisit: Number(record?.lastVisit || record?.firstVisit || Date.now()),
+          visitCount: Number(record?.visitCount || 1),
+          isRegistered: Boolean(record?.isRegistered || record?.uid),
+          uid: safeText(record?.uid),
+        }))
+        .filter((record) => record.sessionId);
+
+      if (validVisitors.length === 0) {
+        setVisitorsError('لم يتم العثور على زيارات صالحة داخل الملف.');
+        return;
+      }
+
+      await Promise.all(validVisitors.map((record) => setDoc(doc(db, 'visitors', record.sessionId), {
+        sessionId: record.sessionId,
+        firstVisit: Timestamp.fromMillis(record.firstVisit),
+        lastVisit: Timestamp.fromMillis(record.lastVisit),
+        visitCount: record.visitCount,
+        isRegistered: record.isRegistered,
+        ...(record.uid ? { uid: record.uid } : {}),
+        restoredAt: Timestamp.now(),
+      }, { merge: true })));
+
+      await fetchVisitors();
+      setLastUpdated(new Date());
+      setVisitorsError(null);
+      setAdminError(`تم استرجاع ${validVisitors.length} زيارة قديمة بنجاح.`);
+    } catch (error: any) {
+      console.error('[admin] import visitors error:', error);
+      setVisitorsError(`تعذر استيراد الزيارات القديمة: ${error?.message || 'خطأ غير معروف'}`);
+    } finally {
+      setIsImportingVisitors(false);
+    }
+  };
+
+  const diagnostics = [
+    {
+      label: 'تسجيل الدخول',
+      ok: Boolean(user),
+      detail: user?.email || 'لا يوجد مستخدم',
+    },
+    {
+      label: 'صلاحية الأدمن',
+      ok: role === 'admin',
+      detail: role || 'غير معروف',
+    },
+    {
+      label: 'حساب المالك',
+      ok: user?.uid === OWNER_UID || isOwnerEmail(user?.email),
+      detail: OWNER_EMAIL,
+    },
+    {
+      label: 'Firestore users',
+      ok: !adminError,
+      detail: `${users.length} مستخدم`,
+    },
+    {
+      label: 'Firestore visitors',
+      ok: !visitorsError,
+      detail: visitorsError || `${visitors.length} زيارة`,
+    },
+  ];
+
   return (
     <div className="space-y-8">
       <motion.div variants={fadeUp} className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -488,6 +580,13 @@ const AdminDashboard: React.FC = () => {
             className="hidden"
             onChange={handleImportUsersFile}
           />
+          <input
+            ref={visitorImportInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={handleImportVisitorsFile}
+          />
           <motion.button
             onClick={() => userImportInputRef.current?.click()}
             disabled={isImportingUsers}
@@ -497,6 +596,16 @@ const AdminDashboard: React.FC = () => {
           >
             <UserPlus className="w-4 h-4" />
             {isImportingUsers ? 'جار الاسترجاع...' : 'استرجاع الحسابات'}
+          </motion.button>
+          <motion.button
+            onClick={() => visitorImportInputRef.current?.click()}
+            disabled={isImportingVisitors}
+            whileHover={{ y: -1 }}
+            whileTap={{ scale: 0.98 }}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-xl text-sm font-medium text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors shadow-sm disabled:opacity-50"
+          >
+            <Eye className="w-4 h-4" />
+            {isImportingVisitors ? 'جار استرجاع الزيارات...' : 'استرجاع الزيارات'}
           </motion.button>
           <motion.button
             onClick={handleRefreshAll}
@@ -519,6 +628,25 @@ const AdminDashboard: React.FC = () => {
           {adminError}
         </motion.div>
       )}
+
+      <motion.div variants={fadeUp} className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        {diagnostics.map((item) => (
+          <div
+            key={item.label}
+            className={`rounded-xl border px-4 py-3 text-sm ${
+              item.ok
+                ? 'border-green-100 bg-green-50 text-green-700 dark:border-green-900/50 dark:bg-green-900/20 dark:text-green-300'
+                : 'border-amber-100 bg-amber-50 text-amber-700 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300'
+            }`}
+          >
+            <div className="flex items-center gap-2 font-semibold">
+              {item.ok ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}
+              {item.label}
+            </div>
+            <div className="mt-1 truncate text-xs opacity-80" title={item.detail}>{item.detail}</div>
+          </div>
+        ))}
+      </motion.div>
 
       {/* Stats Grid */}
       <motion.div variants={fadeUp} className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">

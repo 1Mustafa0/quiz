@@ -1,4 +1,5 @@
 export const OWNER_EMAIL = 'mstfyalswdany913@gmail.com';
+export const OWNER_UID = 'gsU8IdYVsxgHdwdbsmDVh1ClzO92';
 
 type UserLike = {
   email?: string | null;
