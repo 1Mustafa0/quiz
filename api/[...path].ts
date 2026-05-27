@@ -391,6 +391,14 @@ const normalizeQuiz = (value: any, expectedCount: number) => {
     const correctAnswer = normalizeText(answerFromLetter || q?.correctAnswer || q?.correct_answer || q?.answer || answerFromText || (inferredAnswer?.score > 0 ? inferredAnswer.option : ''));
     const difficulty = normalizeText(q?.difficulty).toLowerCase();
     const safeDifficulty = ['easy', 'medium', 'hard'].includes(difficulty) ? difficulty : 'medium';
+    const bloomLevel = normalizeText(q?.bloom_level ?? q?.bloomLevel).toLowerCase();
+    const safeBloomLevel = ['remember', 'understand', 'apply', 'analyze'].includes(bloomLevel)
+      ? bloomLevel
+      : safeDifficulty === 'easy'
+        ? 'remember'
+        : safeDifficulty === 'hard'
+          ? 'apply'
+          : 'analyze';
     const topicTag = normalizeText(q?.topic_tag ?? q?.topicTag ?? q?.topic);
     const exactCorrectAnswer = options.find(option => option === correctAnswer) ||
       options.find(option => comparable(option) === comparable(correctAnswer)) ||
@@ -406,6 +414,7 @@ const normalizeQuiz = (value: any, expectedCount: number) => {
       type: 'multiple-choice' as const,
       id: Number.isFinite(Number(q?.id)) ? Number(q.id) : index + 1,
       difficulty: safeDifficulty,
+      bloom_level: safeBloomLevel,
       topic_tag: topicTag || 'General',
       question: questionText,
       optionsMap: optionsMap || { A: options[0], B: options[1], C: options[2], D: options[3] },
@@ -536,6 +545,7 @@ const generateWithGemini = async (prompt: string, expectedCount: number, image?:
                     properties: {
                       id: { type: Type.NUMBER },
                       difficulty: { type: Type.STRING, enum: ['easy', 'medium', 'hard'] },
+                      bloom_level: { type: Type.STRING, enum: ['remember', 'understand', 'apply', 'analyze'] },
                       topic_tag: { type: Type.STRING },
                       question: { type: Type.STRING },
                       options: {
@@ -551,7 +561,7 @@ const generateWithGemini = async (prompt: string, expectedCount: number, image?:
                       correct_option: { type: Type.STRING, enum: ['A', 'B', 'C', 'D'] },
                       explanation: { type: Type.STRING },
                     },
-                    required: ['id', 'difficulty', 'topic_tag', 'question', 'options', 'correct_option', 'explanation'],
+                    required: ['id', 'difficulty', 'bloom_level', 'topic_tag', 'question', 'options', 'correct_option', 'explanation'],
                   },
                 },
               },
@@ -589,13 +599,16 @@ const generateQuizFromContent = async (params: any) => {
   const requestedCount = expectedCount > 0 ? expectedCount : recommendQuestionCount(cleanedContent.length);
   const prompt = `Generate exactly ${requestedCount} multiple-choice questions from the lesson content.
 Use only the content. Cover different lesson headings. Same language as the content.
-Each question must have 4 options A-D, one correct_option, and a short explanation.
+If the content is Arabic or mostly Arabic, write natural Arabic suitable for Egyptian/Arab students and keep text RTL-friendly.
+Bloom mapping: easy = remember/understand, medium = analyze, hard = apply/analyze. Set bloom_level to one of remember, understand, apply, analyze.
+Each question must have 4 options A-D, one correct_option, and a detailed explanation.
+The explanation must say why the correct option is right and why each wrong option is wrong or unsupported by the source.
 correct_option is REQUIRED and must be exactly one letter: A, B, C, or D. Do not use "answer" instead of correct_option.
 Requested difficulty focus: ${params.difficulty || 'medium'}.
 ${params.notes ? `User notes: ${String(params.notes).slice(0, 700)}` : ''}
 
 Return JSON only in this shape:
-{"title":"...","description":"...","questions":[{"id":1,"difficulty":"easy","topic_tag":"...","question":"...","options":{"A":"...","B":"...","C":"...","D":"..."},"correct_option":"A","explanation":"..."}]}
+{"title":"...","description":"...","questions":[{"id":1,"difficulty":"easy","bloom_level":"remember","topic_tag":"...","question":"...","options":{"A":"...","B":"...","C":"...","D":"..."},"correct_option":"A","explanation":"..."}]}
 
 LESSON CONTENT:
 ${(structuredContent || cleanedContent || '[Image attached]').slice(0, MAX_QUIZ_TEXT_CHARS)}`;
