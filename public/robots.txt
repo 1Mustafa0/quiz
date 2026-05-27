@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://aiqu.app/sitemap.xml
+Sitemap: https://quiz-sigma-eight-92.vercel.app/sitemap.xml

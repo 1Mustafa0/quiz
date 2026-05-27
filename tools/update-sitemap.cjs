@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const siteUrl = (process.env.VITE_SITE_URL || process.env.SITE_URL || 'https://aiqu.app').replace(/\/+$/, '');
+const siteUrl = (process.env.VITE_SITE_URL || process.env.SITE_URL || 'https://quiz-sigma-eight-92.vercel.app').replace(/\/+$/, '');
 const today = new Date().toISOString().slice(0, 10);
 
 const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
