@@ -6,9 +6,11 @@ import {
   Cpu, Play, FileText, Globe, Zap, Star, Loader2
 } from 'lucide-react';
 import { motion } from 'motion/react';
+import { useLanguage } from '../contexts/LanguageContext';
 
 const Home: React.FC = () => {
   const { user, login, loginLoading } = useAuth();
+  const { direction, t } = useLanguage();
   const navigate = useNavigate();
 
   const handleLogin = () => {
@@ -19,24 +21,24 @@ const Home: React.FC = () => {
 
   const mainFeatures = [
     {
-      title: 'AI Quiz Builder',
-      description: 'Upload a PDF, Word doc, or image and let Gemini AI analyze the content and generate professional quiz questions in seconds.',
+      title: t('home.feature.quiz.title'),
+      description: t('home.feature.quiz.description'),
       icon: Sparkles,
       gradient: 'from-indigo-500 to-purple-600',
       bg: 'from-indigo-50 to-purple-50 dark:from-indigo-900/20 dark:to-purple-900/20',
       path: '/builder',
     },
     {
-      title: 'Mind Map Builder',
-      description: 'Generate interactive AI-powered mind maps from any topic. Beautiful radial SVG visuals with zoom and pan support.',
+      title: t('home.feature.mindmap.title'),
+      description: t('home.feature.mindmap.description'),
       icon: Brain,
       gradient: 'from-violet-500 to-fuchsia-600',
       bg: 'from-violet-50 to-fuchsia-50 dark:from-violet-900/20 dark:to-fuchsia-900/20',
       path: '/mindmaps/builder',
     },
     {
-      title: 'Quiz Library',
-      description: 'Browse, play, and track your results. All your quizzes in one place with detailed performance statistics.',
+      title: t('home.feature.library.title'),
+      description: t('home.feature.library.description'),
       icon: Library,
       gradient: 'from-blue-500 to-cyan-600',
       bg: 'from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20',
@@ -47,47 +49,47 @@ const Home: React.FC = () => {
   const steps = [
     {
       number: '1',
-      title: 'Upload Content',
-      description: 'Upload a PDF, Word doc, or image — or paste text directly into the editor.',
+      title: t('home.step.upload.title'),
+      description: t('home.step.upload.description'),
       icon: Upload,
     },
     {
       number: '2',
-      title: 'AI Analyzes',
-      description: 'Gemini AI reads your content and generates accurate, varied questions automatically.',
+      title: t('home.step.ai.title'),
+      description: t('home.step.ai.description'),
       icon: Cpu,
     },
     {
       number: '3',
-      title: 'Play & Share',
-      description: 'Start your quiz instantly, track your score, and share it with anyone.',
+      title: t('home.step.share.title'),
+      description: t('home.step.share.description'),
       icon: Play,
     },
   ];
 
   const capabilities = [
-    { label: 'Multilingual', icon: Globe, desc: 'Supports Arabic, English, and 50+ other languages' },
-    { label: 'CSV Import', icon: FileText, desc: 'Import bulk questions from a simple CSV file' },
-    { label: 'Fast & Smart', icon: Zap, desc: 'Generates a full quiz in under 30 seconds' },
-    { label: 'Completely Free', icon: Star, desc: 'All features available with no limits or subscriptions' },
+    { label: t('home.capability.multilingual.label'), icon: Globe, desc: t('home.capability.multilingual.desc') },
+    { label: t('home.capability.csv.label'), icon: FileText, desc: t('home.capability.csv.desc') },
+    { label: t('home.capability.fast.label'), icon: Zap, desc: t('home.capability.fast.desc') },
+    { label: t('home.capability.free.label'), icon: Star, desc: t('home.capability.free.desc') },
   ];
 
   const searchTopics = [
     {
-      title: 'صانع اختبارات بالذكاء الاصطناعي',
-      text: 'AI Quiz Master يساعدك على تحويل الدروس، الملخصات، والمحتوى التعليمي إلى كويزات منظمة تحتوي على أسئلة اختيار من متعدد، صح وخطأ، وأسئلة قصيرة.',
+      title: t('home.seo.topic1.title'),
+      text: t('home.seo.topic1.text'),
     },
     {
-      title: 'إنشاء أسئلة من PDF وWord',
-      text: 'يمكنك رفع ملفات PDF أو Word أو PowerPoint أو الصور، ثم استخراج الأفكار المهمة وتحويلها إلى اختبار جاهز للمراجعة أو المشاركة مع الطلاب.',
+      title: t('home.seo.topic2.title'),
+      text: t('home.seo.topic2.text'),
     },
     {
-      title: 'خرائط ذهنية للمذاكرة',
-      text: 'أنشئ خريطة ذهنية من أي موضوع لتلخيص المفاهيم والعلاقات بينها، وهي مفيدة للطلاب والمعلمين قبل الامتحانات أو أثناء شرح الدروس.',
+      title: t('home.seo.topic3.title'),
+      text: t('home.seo.topic3.text'),
     },
     {
-      title: 'مشاركة امتحان بدون تسجيل دخول',
-      text: 'بعد إنشاء الكويز يمكنك مشاركة رابط امتحان عام مع أي شخص، ويستطيع فتحه مباشرة من المتصفح دون الحاجة إلى إنشاء حساب.',
+      title: t('home.seo.topic4.title'),
+      text: t('home.seo.topic4.text'),
     },
   ];
 
@@ -101,13 +103,13 @@ const Home: React.FC = () => {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.1 }}
           className="relative mx-auto max-w-4xl text-balance text-[2.45rem] font-black leading-[1.08] text-gray-900 dark:text-white sm:text-5xl lg:text-6xl"
-          dir="ltr"
+          dir={direction}
         >
-          <span className="block">Transform Your Content</span>
+          <span className="block">{t('home.hero.line1')}</span>
           <span className="block">
-            into{' '}
+            {t('home.hero.line2Prefix')}{' '}
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400">
-            Interactive Quizzes
+              {t('home.hero.line2Highlight')}
             </span>
           </span>
         </motion.h1>
@@ -117,10 +119,9 @@ const Home: React.FC = () => {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.2 }}
           className="relative mx-auto max-w-3xl text-base leading-8 text-gray-600 dark:text-slate-400 sm:text-lg"
-          dir="ltr"
+          dir={direction}
         >
-          The smartest tool for students and teachers. Upload any file and let AI instantly
-          generate a professional quiz or build mind maps with just a few words.
+          {t('home.hero.subtitle')}
         </motion.p>
 
         <motion.div
@@ -135,7 +136,7 @@ const Home: React.FC = () => {
               className="w-full sm:w-auto min-w-[220px] justify-center group inline-flex items-center gap-2 px-7 py-4 text-base font-bold rounded-2xl text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 shadow-xl shadow-indigo-200/60 dark:shadow-indigo-900/30 hover:shadow-2xl transition-all transform hover:-translate-y-1"
             >
               <Sparkles className="w-5 h-5 group-hover:rotate-12 transition-transform" />
-              Create a Quiz
+              {t('home.action.createQuiz')}
               <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
             </Link>
           ) : (
@@ -146,7 +147,7 @@ const Home: React.FC = () => {
               className="w-full sm:w-auto min-w-[220px] justify-center group inline-flex items-center gap-2 px-7 py-4 text-base font-bold rounded-2xl text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:from-indigo-400 disabled:to-purple-400 disabled:cursor-not-allowed shadow-xl shadow-indigo-200/60 dark:shadow-indigo-900/30 hover:shadow-2xl transition-all transform hover:-translate-y-1 disabled:hover:translate-y-0"
             >
               {loginLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5 group-hover:rotate-12 transition-transform" />}
-              {loginLoading ? 'Signing in...' : 'Get Started Free'}
+              {loginLoading ? t('auth.signingIn') : t('home.action.getStartedFree')}
               <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
             </button>
           )}
@@ -155,7 +156,7 @@ const Home: React.FC = () => {
             className="w-full sm:w-auto min-w-[220px] justify-center inline-flex items-center gap-2 px-7 py-4 text-base font-semibold rounded-2xl text-gray-700 dark:text-slate-300 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 hover:bg-gray-50 dark:hover:bg-slate-700 shadow-md hover:shadow-lg transition-all transform hover:-translate-y-1"
           >
             <Library className="w-5 h-5" />
-            Browse Quizzes
+            {t('home.action.browseQuizzes')}
           </Link>
         </motion.div>
       </section>
@@ -169,10 +170,10 @@ const Home: React.FC = () => {
           className="text-center"
         >
           <h2 className="text-3xl md:text-4xl font-extrabold text-gray-900 dark:text-white mb-3">
-            Everything You Need in One Place
+            {t('home.features.title')}
           </h2>
           <p className="text-gray-500 dark:text-slate-400 text-lg max-w-2xl mx-auto">
-            Three powerful AI-driven tools to supercharge your learning experience
+            {t('home.features.subtitle')}
           </p>
         </motion.div>
 
@@ -195,7 +196,7 @@ const Home: React.FC = () => {
               <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-3">{feature.title}</h3>
               <p className="text-gray-600 dark:text-slate-400 leading-relaxed text-sm">{feature.description}</p>
               <div className="mt-6 flex items-center gap-2 text-indigo-600 dark:text-indigo-400 font-semibold text-sm group-hover:gap-3 transition-all">
-                <span>Get Started</span>
+                <span>{t('home.action.getStarted')}</span>
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </div>
             </motion.button>
@@ -207,10 +208,10 @@ const Home: React.FC = () => {
       <section className="space-y-10">
         <div className="text-center">
           <h2 className="text-3xl md:text-4xl font-extrabold text-gray-900 dark:text-white mb-3">
-            How It Works
+            {t('home.how.title')}
           </h2>
           <p className="text-gray-500 dark:text-slate-400 text-lg">
-            Three simple steps to create a professional quiz
+            {t('home.how.subtitle')}
           </p>
         </div>
 
@@ -247,7 +248,7 @@ const Home: React.FC = () => {
       <section className="space-y-6">
         <div className="text-center">
           <h2 className="text-2xl md:text-3xl font-extrabold text-gray-900 dark:text-white mb-3">
-            More Features
+            {t('home.more.title')}
           </h2>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
@@ -273,10 +274,10 @@ const Home: React.FC = () => {
       <section className="space-y-8" aria-labelledby="seo-learning-tools">
         <div className="text-center max-w-3xl mx-auto">
           <h2 id="seo-learning-tools" className="text-3xl md:text-4xl font-extrabold text-gray-900 dark:text-white mb-3">
-            صانع اختبارات وخرائط ذهنية للطلاب والمعلمين
+            {t('home.seo.title')}
           </h2>
           <p className="text-gray-600 dark:text-slate-400 text-lg leading-relaxed">
-            استخدم AI Quiz Master لإنشاء اختبارات تعليمية من الملفات والنصوص، وتنظيم المذاكرة، ومشاركة الامتحانات بسهولة من أي جهاز.
+            {t('home.seo.description')}
           </p>
         </div>
 
@@ -285,7 +286,7 @@ const Home: React.FC = () => {
             <article
               key={topic.title}
               className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-100 dark:border-slate-700 p-6 shadow-sm"
-              dir="rtl"
+              dir={direction}
             >
               <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-3">{topic.title}</h3>
               <p className="text-gray-600 dark:text-slate-400 leading-relaxed">{topic.text}</p>
@@ -293,12 +294,12 @@ const Home: React.FC = () => {
           ))}
         </div>
 
-        <div className="bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/50 rounded-2xl p-6 text-center" dir="rtl">
+        <div className="bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/50 rounded-2xl p-6 text-center" dir={direction}>
           <h3 className="text-2xl font-extrabold text-gray-900 dark:text-white mb-3">
-            مناسب للمراجعة، التدريب، والاختبارات السريعة
+            {t('home.seo.banner.title')}
           </h3>
           <p className="text-gray-600 dark:text-slate-400 max-w-3xl mx-auto leading-relaxed">
-            سواء كنت طالبًا يريد مراجعة درس، أو معلمًا يريد إنشاء امتحان سريع، أو صانع محتوى تعليمي يريد تحويل الشرح إلى أسئلة، يوفر لك التطبيق تجربة بسيطة لإنشاء كويز ومشاركته.
+            {t('home.seo.banner.text')}
           </p>
         </div>
       </section>
@@ -312,9 +313,9 @@ const Home: React.FC = () => {
         </div>
 
         <div className="relative space-y-3">
-          <h2 className="text-3xl md:text-4xl font-extrabold">Ready to Level Up Your Learning?</h2>
+          <h2 className="text-3xl md:text-4xl font-extrabold">{t('home.cta.title')}</h2>
           <p className="text-indigo-100 text-lg max-w-xl mx-auto">
-            Join now and start creating smart quizzes and mind maps from any educational content
+            {t('home.cta.subtitle')}
           </p>
         </div>
 
@@ -326,14 +327,14 @@ const Home: React.FC = () => {
                 className="inline-flex items-center gap-2 px-8 py-4 bg-white text-indigo-600 font-bold rounded-2xl hover:bg-indigo-50 shadow-xl transition-all hover:-translate-y-1"
               >
                 <Sparkles className="w-5 h-5" />
-                Create a Quiz
+                {t('home.action.createQuiz')}
               </Link>
               <Link
                 to="/mindmaps/builder"
                 className="inline-flex items-center gap-2 px-8 py-4 bg-white/10 text-white font-bold rounded-2xl border border-white/30 hover:bg-white/20 transition-all hover:-translate-y-1"
               >
                 <Brain className="w-5 h-5" />
-                Build a Mind Map
+                {t('home.action.buildMindMap')}
               </Link>
             </>
           ) : (
@@ -344,7 +345,7 @@ const Home: React.FC = () => {
               className="inline-flex items-center gap-2 px-10 py-4 bg-white text-indigo-600 font-bold text-lg rounded-2xl hover:bg-indigo-50 disabled:bg-indigo-100 disabled:cursor-not-allowed shadow-2xl transition-all hover:-translate-y-1 disabled:hover:translate-y-0"
             >
               {loginLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
-              {loginLoading ? 'Signing in...' : 'Get Started Free'}
+              {loginLoading ? t('auth.signingIn') : t('home.action.getStartedFree')}
               <ArrowRight className="w-5 h-5" />
             </button>
           )}
@@ -353,15 +354,15 @@ const Home: React.FC = () => {
         <div className="relative grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 text-center">
           <div>
             <div className="text-3xl font-black">50+</div>
-            <div className="text-indigo-200 text-sm mt-1">Languages</div>
+            <div className="text-indigo-200 text-sm mt-1">{t('home.stat.languages')}</div>
           </div>
           <div>
             <div className="text-3xl font-black">30s</div>
-            <div className="text-indigo-200 text-sm mt-1">To Generate a Quiz</div>
+            <div className="text-indigo-200 text-sm mt-1">{t('home.stat.generate')}</div>
           </div>
           <div>
-            <div className="text-3xl font-black">100%</div>
-            <div className="text-indigo-200 text-sm mt-1">Free</div>
+            <div className="text-3xl font-black">{t('home.capability.free.label')}</div>
+            <div className="text-indigo-200 text-sm mt-1">{t('home.stat.free')}</div>
           </div>
         </div>
       </section>

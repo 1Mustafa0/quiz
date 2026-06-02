@@ -1,6 +1,7 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AlertCircle, X } from 'lucide-react';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface ConfirmModalProps {
   isOpen: boolean;
@@ -19,10 +20,13 @@ const ConfirmModal: React.FC<ConfirmModalProps> = ({
   onConfirm,
   title,
   message,
-  confirmText = 'تأكيد',
-  cancelText = 'إلغاء',
+  confirmText,
+  cancelText,
   type = 'info'
 }) => {
+  const { direction, t } = useLanguage();
+  const safeConfirmText = confirmText || t('common.confirm');
+  const safeCancelText = cancelText || t('common.cancel');
   const colors = {
     danger: 'bg-red-600 hover:bg-red-700 text-white',
     info: 'bg-indigo-600 hover:bg-indigo-700 text-white',
@@ -44,6 +48,7 @@ const ConfirmModal: React.FC<ConfirmModalProps> = ({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.9, y: 20 }}
             className="bg-white p-8 rounded-3xl max-w-md w-full shadow-2xl text-center space-y-6 relative overflow-hidden"
+            dir={direction}
           >
             <button 
               onClick={onClose}
@@ -66,7 +71,7 @@ const ConfirmModal: React.FC<ConfirmModalProps> = ({
                 onClick={onClose}
                 className="flex-1 px-6 py-3 bg-gray-100 text-gray-700 rounded-xl font-semibold hover:bg-gray-200 transition-all active:scale-95"
               >
-                {cancelText}
+                {safeCancelText}
               </button>
               <button
                 onClick={() => {
@@ -75,7 +80,7 @@ const ConfirmModal: React.FC<ConfirmModalProps> = ({
                 }}
                 className={`flex-1 px-6 py-3 ${colors[type]} rounded-xl font-semibold transition-all shadow-lg active:scale-95`}
               >
-                {confirmText}
+                {safeConfirmText}
               </button>
             </div>
           </motion.div>

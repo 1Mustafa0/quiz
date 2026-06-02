@@ -5,6 +5,7 @@ import { doc, getDoc, setDoc, collection, query, where, getDocs, Timestamp } fro
 import { User, Mail, Calendar, Award, BookOpen, BarChart2, Copy, Check, Shield, ExternalLink, Crown } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useAuth } from '../AuthContext';
+import SupportCTA from '../components/SupportCTA';
 
 const OWNER_EMAIL = 'mstfyalswdany913@gmail.com';
 
@@ -262,6 +263,10 @@ const Profile: React.FC = () => {
           </div>
         </motion.div>
       </div>
+
+      {isOwnProfile && (
+        <SupportCTA message="The project is free and independently built. Optional support helps keep AI quiz generation available for everyone." />
+      )}
 
       {/* Additional Info / History Link */}
       <div className="flex justify-center">

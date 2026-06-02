@@ -4,22 +4,170 @@ import { useAuth } from '../AuthContext';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { collection, addDoc, updateDoc, doc, getDoc, Timestamp } from 'firebase/firestore';
 import type { GeneratedQuestion } from '../services/geminiService';
-import { Upload, FileText, Plus, Trash2, Save, Sparkles, Loader2, AlertCircle, CheckCircle2, ArrowLeft, Pencil, MessageSquarePlus, ChevronDown, Download } from 'lucide-react';
+import { Upload, FileText, Plus, Trash2, Save, Sparkles, Loader2, AlertCircle, CheckCircle2, ArrowLeft, Pencil, MessageSquarePlus, ChevronDown, Download, Copy } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import SupportCTA from '../components/SupportCTA';
 import ConfirmModal from '../components/ConfirmModal';
 import CategorySelect from '../components/CategorySelect';
 import ExtractedTextPreview from '../components/ExtractedTextPreview';
 import { ownerOnlyError } from '../utils/owner';
-import { exportQuizToPdf } from '../utils/quizPdf';
+import { exportQuizToPdf, getPdfQuestionAnswer, getPdfQuestionOptions } from '../utils/quizPdf';
 import { normalizeCategory } from '../utils/categories';
 import { formatExtractedTextPreview } from '../utils/extractedText';
 
-const MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024; // Server upload limit
+const MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024;
+const MAX_IMAGE_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024;
+const IMAGE_GENERATION_PAYLOAD_LIMIT_BYTES = 3 * 1024 * 1024;
+const SUPPORT_AFTER_CREATE_KEY = 'ai-quiz-master-support-after-first-create';
 const ACCEPTED_FILE_TYPES = [
   '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.csv',
   '.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tif', '.tiff',
   '.txt', '.js', '.ts', '.tsx', '.jsx', '.py', '.java', '.cpp', '.c', '.html', '.css', '.md', '.json',
 ].join(',');
+
+const CSV_FORMAT_PROMPT = `حوّل النص التالي إلى أسئلة اختيار من متعدد بصيغة CSV فقط، بدون أي شرح إضافي.
+
+التنسيق المطلوب بالضبط:
+Question,Option1,Option2,Option3,Option4,Correct
+
+القواعد:
+- كل سطر بعد العنوان يمثل سؤالًا واحدًا فقط.
+- كل سؤال يجب أن يحتوي على 4 اختيارات فقط.
+- عمود Correct يجب أن يكون رقمًا من 0 إلى 3.
+- 0 يعني Option1، و1 يعني Option2، و2 يعني Option3، و3 يعني Option4.
+- إذا كان السؤال أو أي اختيار يحتوي على فاصلة، ضعه بين علامتي اقتباس " " حتى لا ينقسم إلى أعمدة خاطئة.
+- لا تستخدم ترقيمًا أو نقاطًا أو Markdown.
+- لا تكتب أي نص قبل أو بعد CSV.
+
+مثال على التنسيق الصحيح:
+Question,Option1,Option2,Option3,Option4,Correct
+"Before surgery, the patient must have:","Written consent","Blood transfusion","Physiotherapy","Isolation",0
+"During a seizure, the nurse should first:","Insert an object into the mouth","Leave the patient alone","Stay with the patient and note the time","Force the patient to sit",2
+
+النص المطلوب تحويله:
+`;
+
+const isImageUpload = (file: File) =>
+  file.type.startsWith('image/') || /\.(jpe?g|png|webp|gif|bmp|tiff?)$/i.test(file.name);
+
+const dataUrlToBase64 = (dataUrl: string) => dataUrl.split(',')[1] || '';
+
+const readFileAsDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+const createImagePayloadForGemini = async (file: File) => {
+  const originalDataUrl = await readFileAsDataUrl(file);
+  if (file.size <= IMAGE_GENERATION_PAYLOAD_LIMIT_BYTES) {
+    return { data: dataUrlToBase64(originalDataUrl), mimeType: file.type || 'image/jpeg' };
+  }
+
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = objectUrl;
+    });
+
+    const maxDimensions = [1600, 1200, 900, 720];
+    const qualities = [0.78, 0.66, 0.54, 0.44];
+
+    for (const maxDimension of maxDimensions) {
+      const scale = Math.min(1, maxDimension / Math.max(image.width, image.height));
+      const width = Math.max(1, Math.round(image.width * scale));
+      const height = Math.max(1, Math.round(image.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d');
+      if (!context) continue;
+      context.drawImage(image, 0, 0, width, height);
+
+      for (const quality of qualities) {
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        const base64 = dataUrlToBase64(dataUrl);
+        if (base64.length * 0.75 <= IMAGE_GENERATION_PAYLOAD_LIMIT_BYTES) {
+          return { data: base64, mimeType: 'image/jpeg' };
+        }
+      }
+    }
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+
+  throw new Error('الصورة كبيرة جدًا للإرسال. جرّب لقطة شاشة أو صورة أوضح بحجم أصغر.');
+};
+
+const extractPdfTextInBrowser = async (file: File) => {
+  const pdfjs = await import('pdfjs-dist/build/pdf.mjs');
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+    'pdfjs-dist/build/pdf.worker.min.mjs',
+    import.meta.url
+  ).toString();
+
+  const data = new Uint8Array(await file.arrayBuffer());
+  const pdf = await pdfjs.getDocument({ data }).promise;
+  const pages: string[] = [];
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    const text = content.items
+      .map((item: any) => ('str' in item ? item.str : ''))
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (text) pages.push(text);
+  }
+
+  return pages.join('\n\n').trim();
+};
+
+const extractTextFileInBrowser = async (file: File) => {
+  const text = await file.text();
+  return text.trim();
+};
+
+const parseLargeFileInBrowser = async (file: File): Promise<{ text: string; extraction?: any }> => {
+  const lowerName = file.name.toLowerCase();
+  let text = '';
+  let method = 'browser-text';
+
+  if (file.type === 'application/pdf' || lowerName.endsWith('.pdf')) {
+    text = await extractPdfTextInBrowser(file);
+    method = 'browser-pdfjs';
+  } else if (
+    file.type.startsWith('text/') ||
+    /\.(txt|md|json|csv|js|ts|tsx|jsx|py|java|cpp|c|html|css)$/i.test(lowerName)
+  ) {
+    text = await extractTextFileInBrowser(file);
+    method = 'browser-text';
+  } else {
+    throw new Error('الملف كبير على نسخة Vercel الحالية. جرّب PDF يحتوي على نص قابل للنسخ، أو انسخ النص داخل خانة النص.');
+  }
+
+  if (!text || text.length < 10) {
+    throw new Error('تعذر استخراج نص واضح من الملف داخل المتصفح. جرّب ملفًا نصيًا أو انسخ النص يدويًا.');
+  }
+
+  return {
+    text,
+    extraction: {
+      method,
+      usedOcr: false,
+      length: text.length,
+      returnedLength: text.length,
+      originalName: file.name,
+      mimeType: file.type,
+    },
+  };
+};
 
 interface ExtractionMeta {
   fileName: string;
@@ -61,6 +209,160 @@ const SAVE_QUIZ_ERROR =
 const SERVER_UNAVAILABLE_ERROR =
   'الخادم غير متاح حالياً. انتظر لحظة ثم حاول مرة أخرى.';
 
+const MAX_GENERATED_QUESTIONS = 30;
+type FeedbackMode = 'end' | 'per-question';
+
+const estimateQuestionCountFromText = (text: string) => {
+  const lines = text
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  const numberedQuestionCount = lines.filter(line =>
+    /^(?:س|q|question)?\s*\d{1,3}\s*[\).\-:]/i.test(line) ||
+    /^\d{1,3}\s*[-–]\s*/.test(line)
+  ).length;
+  const questionMarkCount = (text.match(/[؟?]/g) || []).length;
+  const qaCount = lines.filter(line => /^(?:q|س)\s*\d{0,3}\s*[:\-]/i.test(line)).length;
+
+  return Math.min(
+    MAX_GENERATED_QUESTIONS,
+    Math.max(numberedQuestionCount, questionMarkCount, qaCount)
+  );
+};
+
+const parseCsvRows = (text: string) => {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const nextChar = text[i + 1];
+
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        cell += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (char === ',' && !inQuotes) {
+      row.push(cell.trim());
+      cell = '';
+      continue;
+    }
+
+    if ((char === '\n' || char === '\r') && !inQuotes) {
+      if (char === '\r' && nextChar === '\n') i += 1;
+      row.push(cell.trim());
+      if (row.some(value => value.trim() !== '')) rows.push(row);
+      row = [];
+      cell = '';
+      continue;
+    }
+
+    cell += char;
+  }
+
+  row.push(cell.trim());
+  if (row.some(value => value.trim() !== '')) rows.push(row);
+
+  return rows;
+};
+
+const normalizeImportedOptions = (optionColumns: string[]) => {
+  if (optionColumns.length === 4) return optionColumns;
+  if (optionColumns.length < 4) return null;
+
+  if (optionColumns[optionColumns.length - 1] === '') {
+    return [
+      optionColumns[0] || '',
+      optionColumns[1] || '',
+      optionColumns.slice(2, -1).join(', ').trim(),
+      '',
+    ];
+  }
+
+  return [
+    optionColumns[0] || '',
+    optionColumns[1] || '',
+    optionColumns[2] || '',
+    optionColumns.slice(3).join(', ').trim(),
+  ];
+};
+
+const looksLikeCsvHeader = (columns: string[]) => {
+  const normalized = columns.map(column => column.trim().toLowerCase());
+  return normalized[0] === 'question' && (
+    normalized.includes('correct') ||
+    normalized.includes('answer') ||
+    normalized.some(column => /^option\s*1$/.test(column))
+  );
+};
+
+const getImportedCorrectIndex = (value: string, options: string[]) => {
+  const clean = value.trim();
+  const numeric = Number.parseInt(clean, 10);
+  if (!Number.isNaN(numeric)) {
+    if (numeric >= 0 && numeric < options.length) return numeric;
+    if (numeric >= 1 && numeric <= options.length) return numeric - 1;
+  }
+
+  const letterIndex = ['A', 'B', 'C', 'D'].indexOf(clean.toUpperCase());
+  if (letterIndex >= 0 && letterIndex < options.length) return letterIndex;
+
+  const answerTextIndex = options.findIndex(option => option.trim().toLowerCase() === clean.toLowerCase());
+  return answerTextIndex >= 0 ? answerTextIndex : -1;
+};
+
+const parseImportedCsvQuestions = (text: string): GeneratedQuestion[] => {
+  const rows = parseCsvRows(text);
+  if (rows.length === 0) return [];
+
+  const startIndex = looksLikeCsvHeader(rows[0]) ? 1 : 0;
+  const importedQuestions: GeneratedQuestion[] = [];
+
+  for (let i = startIndex; i < rows.length; i += 1) {
+    const columns = rows[i].map(col => col.trim());
+    const correctValue = columns[columns.length - 1] || '';
+    const optionColumns = columns.length >= 6
+      ? columns.slice(Math.max(1, columns.length - 5), columns.length - 1)
+      : columns.slice(1, -1);
+    const questionColumns = columns.slice(0, Math.max(1, columns.length - 5));
+    const questionText = questionColumns.join(', ').trim();
+    const options = normalizeImportedOptions(optionColumns);
+    if (!questionText || !options || options.some(option => !option.trim())) continue;
+
+    const correctIndex = getImportedCorrectIndex(correctValue, options);
+    if (correctIndex < 0 || correctIndex >= options.length) continue;
+
+    importedQuestions.push({
+      type: 'multiple-choice',
+      questionText,
+      options,
+      correctAnswer: options[correctIndex],
+      feedback: '',
+    });
+  }
+
+  return importedQuestions;
+};
+
+const isLikelyQuestionCsv = (text: string) => {
+  const rows = parseCsvRows(text);
+  if (rows.length < 2) return false;
+  if (looksLikeCsvHeader(rows[0])) return true;
+
+  const sampleRows = rows.slice(0, 5);
+  const validRows = parseImportedCsvQuestions(sampleRows.map(row => row.join(',')).join('\n')).length;
+  return validRows >= Math.min(2, sampleRows.length);
+};
+
 const formatFileSize = (bytes: number) => {
   if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MB`;
   if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -68,6 +370,39 @@ const formatFileSize = (bytes: number) => {
 };
 
 const getExtractionLabel = (method: string) => EXTRACTION_LABELS[method] || method || 'Unknown extraction';
+
+const FeedbackModeControl: React.FC<{
+  value: FeedbackMode;
+  onChange: (value: FeedbackMode) => void;
+}> = ({ value, onChange }) => (
+  <div>
+    <label className="block text-sm font-medium text-gray-700 mb-1">Feedback Timing</label>
+    <div className="grid grid-cols-2 gap-2">
+      <button
+        type="button"
+        onClick={() => onChange('end')}
+        className={`rounded-lg px-3 py-2 text-sm font-medium transition-all ${
+          value === 'end'
+            ? 'bg-indigo-600 text-white shadow-md'
+            : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+        }`}
+      >
+        End of quiz
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange('per-question')}
+        className={`rounded-lg px-3 py-2 text-sm font-medium transition-all ${
+          value === 'per-question'
+            ? 'bg-indigo-600 text-white shadow-md'
+            : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+        }`}
+      >
+        Each question
+      </button>
+    </div>
+  </div>
+);
 
 const QuestionEditor: React.FC<{
   question: GeneratedQuestion;
@@ -120,8 +455,12 @@ const QuestionEditor: React.FC<{
                 value={opt}
                 onChange={(e) => {
                   const newOpts = [...question.options];
+                  const wasCorrectAnswer = question.correctAnswer === opt;
                   newOpts[optIndex] = e.target.value;
-                  onUpdate({ options: newOpts });
+                  onUpdate({
+                    options: newOpts,
+                    ...(wasCorrectAnswer ? { correctAnswer: e.target.value } : {}),
+                  });
                 }}
                 placeholder={`Option ${optIndex + 1}`}
                 className="flex-grow px-3 py-2 border border-gray-100 bg-gray-50 rounded-lg text-sm"
@@ -158,6 +497,7 @@ const QuizBuilder: React.FC = () => {
   const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
   const [timer, setTimer] = useState<number>(10);
   const [noTimer, setNoTimer] = useState(false);
+  const [feedbackMode, setFeedbackMode] = useState<FeedbackMode>('end');
   const [questions, setQuestions] = useState<GeneratedQuestion[]>([]);
   const [loadingQuiz, setLoadingQuiz] = useState(isEditing);
 
@@ -166,6 +506,7 @@ const QuizBuilder: React.FC = () => {
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [showSupportAfterCreate, setShowSupportAfterCreate] = useState(false);
   const [numQuestions, setNumQuestions] = useState(5);
   const [autoQuestions, setAutoQuestions] = useState(false);
   const [notes, setNotes] = useState('');
@@ -173,6 +514,7 @@ const QuizBuilder: React.FC = () => {
   const [extractedText, setExtractedText] = useState('');
   const [extractedMeta, setExtractedMeta] = useState<ExtractionMeta | null>(null);
   const [showExtractedText, setShowExtractedText] = useState(false);
+  const [lastGenerationMeta, setLastGenerationMeta] = useState<any>(null);
 
   const [activeTab, setActiveTab] = useState<'manual' | 'ai' | null>(isEditing ? 'manual' : null);
 
@@ -190,6 +532,7 @@ const QuizBuilder: React.FC = () => {
         setDifficulty(data.difficulty || 'medium');
         setTimer(data.timer ?? 10);
         setNoTimer(data.timer === 0);
+        setFeedbackMode(data.feedbackMode === 'per-question' ? 'per-question' : 'end');
         setQuestions(data.questions || []);
       } catch (e) {
         setError('فشل تحميل بيانات الكويز.');
@@ -202,6 +545,7 @@ const QuizBuilder: React.FC = () => {
 
   const [manualText, setManualText] = useState('');
   const [useManualText, setUseManualText] = useState(false);
+  const manualDetectedQuestionCount = estimateQuestionCountFromText(manualText);
 
   const [showCsvImport, setShowCsvImport] = useState(false);
   const [csvText, setCsvText] = useState('');
@@ -224,34 +568,13 @@ const QuizBuilder: React.FC = () => {
     if (!csvText.trim()) return;
     
     try {
-      // Handle both CRLF and LF line endings, and filter out empty lines
-      const lines = csvText.split(/\r?\n/).filter(line => line.trim() !== '');
-      if (lines.length < 2) {
+      const rows = parseCsvRows(csvText);
+      if (rows.length < 1) {
         setError('يرجى إدخال نص يحتوي على العناوين وسؤال واحد على الأقل.');
         return;
       }
 
-      const newQuestions: GeneratedQuestion[] = [];
-      // Skip header
-      for (let i = 1; i < lines.length; i++) {
-        // Simple CSV split (doesn't handle commas inside quotes, but fits the user's AI prompt structure)
-        const columns = lines[i].split(',').map(col => col.trim());
-        if (columns.length >= 6) {
-          const [questionText, opt1, opt2, opt3, opt4, correctIdxStr] = columns;
-          const options = [opt1, opt2, opt3, opt4];
-          const correctIdx = parseInt(correctIdxStr);
-          
-          if (!isNaN(correctIdx) && correctIdx >= 0 && correctIdx < 4) {
-            newQuestions.push({
-              type: 'multiple-choice',
-              questionText,
-              options,
-              correctAnswer: options[correctIdx],
-              feedback: '',
-            });
-          }
-        }
-      }
+      const newQuestions = parseImportedCsvQuestions(csvText);
 
       if (newQuestions.length > 0) {
         setQuestions([...questions, ...newQuestions]);
@@ -281,7 +604,13 @@ const QuizBuilder: React.FC = () => {
         category: generatedCategory,
         difficulty,
         timer,
+        feedbackMode,
         questions: generated.questions,
+        provider: generated.provider || lastGenerationMeta?.provider || 'unknown',
+        status: generated.status || 'success',
+        attempts: generated.attempts || lastGenerationMeta?.attempts || [],
+        cleanedText: generated.cleanedText || lastGenerationMeta?.cleanedText || extractedText || '',
+        userId: user.uid,
         authorUid: user.uid,
         createdAt: Timestamp.now(),
       };
@@ -318,6 +647,7 @@ const QuizBuilder: React.FC = () => {
         setManualText('');
         setExtractedText('');
         setExtractedMeta(null);
+        setLastGenerationMeta(null);
         setShowExtractedText(false);
         setError(null);
         setSuccess(null);
@@ -328,6 +658,10 @@ const QuizBuilder: React.FC = () => {
   const handleGenerateFromManualText = async () => {
     const cleanManualText = manualText.trim();
     if (!cleanManualText) return;
+    const detectedQuestionCount = estimateQuestionCountFromText(cleanManualText);
+    const requestedQuestionCount = autoQuestions
+      ? Math.max(detectedQuestionCount, 0)
+      : Math.max(numQuestions, detectedQuestionCount);
     setIsGenerating(true);
     setError(null);
     setExtractedText(cleanManualText);
@@ -340,14 +674,41 @@ const QuizBuilder: React.FC = () => {
     });
     setShowExtractedText(cleanManualText.length <= 5000);
     try {
+      if (isLikelyQuestionCsv(cleanManualText)) {
+        const importedQuestions = parseImportedCsvQuestions(cleanManualText);
+        if (importedQuestions.length > 0) {
+          const importedQuiz = {
+            title: title.trim() || 'Imported Quiz',
+            description: `Imported ${importedQuestions.length} questions from CSV text.`,
+            questions: importedQuestions,
+            provider: 'csv-import',
+            status: 'success',
+            cleanedText: cleanManualText,
+            attempts: ['csv-direct-import'],
+          };
+          setLastGenerationMeta(importedQuiz);
+          setTitle(importedQuiz.title);
+          setDescription(importedQuiz.description);
+          setQuestions(importedQuestions);
+          await autoSaveAndPlay(importedQuiz);
+          return;
+        }
+      }
+
       const generated = await generateQuizOnServer({
         content: cleanManualText,
-        numQuestions: autoQuestions ? 0 : numQuestions,
+        numQuestions: requestedQuestionCount,
         language: 'detect',
         difficulty,
-        notes: notes.trim() || undefined,
+        notes: [
+          detectedQuestionCount > numQuestions
+            ? `The pasted manual text appears to contain about ${detectedQuestionCount} question-like items. Do not omit them; generate up to ${requestedQuestionCount} questions to preserve coverage.`
+            : '',
+          notes.trim(),
+        ].filter(Boolean).join('\n') || undefined,
       });
       
+      setLastGenerationMeta(generated);
       setTitle(generated.title);
       setDescription(generated.description);
       setQuestions(generated.questions);
@@ -434,7 +795,14 @@ const QuizBuilder: React.FC = () => {
       body: JSON.stringify(payload),
     });
 
-    const data = await response.json();
+    const responseText = await response.text();
+    let data: any = {};
+    try {
+      data = responseText ? JSON.parse(responseText) : {};
+    } catch {
+      data = { error: responseText || `Server returned ${response.status}` };
+    }
+
     if (!response.ok) {
       throw new Error(data?.error || `Server returned ${response.status}`);
     }
@@ -461,6 +829,27 @@ const QuizBuilder: React.FC = () => {
     });
     setShowExtractedText(true);
 
+    if (isLikelyQuestionCsv(cleanText)) {
+      const importedQuestions = parseImportedCsvQuestions(cleanText);
+      if (importedQuestions.length > 0) {
+        const importedQuiz = {
+          title: title.trim() || file.name.replace(/\.[^.]+$/, '') || 'Imported Quiz',
+          description: `Imported ${importedQuestions.length} questions from CSV file.`,
+          questions: importedQuestions,
+          provider: 'csv-import',
+          status: 'success',
+          cleanedText: cleanText,
+          attempts: ['csv-direct-import'],
+        };
+        setLastGenerationMeta(importedQuiz);
+        setTitle(importedQuiz.title);
+        setDescription(importedQuiz.description);
+        setQuestions(importedQuestions);
+        await autoSaveAndPlay(importedQuiz);
+        return;
+      }
+    }
+
     const generated = await generateQuizOnServer({
       content: formattedText,
       numQuestions: autoQuestions ? 0 : numQuestions,
@@ -469,6 +858,7 @@ const QuizBuilder: React.FC = () => {
       notes: notes.trim() || undefined,
     });
 
+    setLastGenerationMeta(generated);
     setTitle(generated.title);
     setDescription(generated.description);
     setQuestions(generated.questions);
@@ -476,8 +866,9 @@ const QuizBuilder: React.FC = () => {
   };
 
   const processFile = async (file: File) => {
-    if (file.size > MAX_UPLOAD_SIZE_BYTES) {
-      setError(`File is too large. Maximum upload size is ${formatFileSize(MAX_UPLOAD_SIZE_BYTES)}.`);
+    const isImageFile = isImageUpload(file);
+    if (isImageFile && file.size > MAX_IMAGE_UPLOAD_SIZE_BYTES) {
+      setError(`الصورة كبيرة جدًا. الحد الأقصى للصور هو ${formatFileSize(MAX_IMAGE_UPLOAD_SIZE_BYTES)}.`);
       return;
     }
 
@@ -501,16 +892,7 @@ const QuizBuilder: React.FC = () => {
     }
 
     try {
-      try {
-        const parsed = await parseFileOnServer(file);
-        await generateQuizFromExtractedText(file, parsed.text, parsed.extraction);
-      } catch (parseErr) {
-        const isImageFile = file.type.startsWith('image/') || /\.(jpe?g|png|webp|gif|bmp|tiff?)$/i.test(file.name);
-        if (!isImageFile) {
-          throw parseErr;
-        }
-
-        console.warn('[image OCR] Server OCR failed, using direct Gemini image generation:', parseErr instanceof Error ? parseErr.message : parseErr);
+      if (isImageFile) {
         setExtractedText('');
         setExtractedMeta({
           fileName: file.name,
@@ -521,33 +903,37 @@ const QuizBuilder: React.FC = () => {
         });
         setShowExtractedText(false);
 
-        const reader = new FileReader();
-        const base64Promise = new Promise<string>((resolve, reject) => {
-          reader.onload = () => {
-            const base64 = (reader.result as string).split(',')[1];
-            resolve(base64);
-          };
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
-
-        const base64Data = await base64Promise;
+        const imagePayload = await createImagePayloadForGemini(file);
         const generated = await generateQuizOnServer({
-          image: {
-            data: base64Data,
-            mimeType: file.type,
-          },
+          image: imagePayload,
           numQuestions: autoQuestions ? 0 : numQuestions,
           language: 'detect',
           difficulty,
           notes: notes.trim() || undefined,
         });
 
+        setLastGenerationMeta(generated);
         setTitle(generated.title);
         setDescription(generated.description);
         setQuestions(generated.questions);
         await autoSaveAndPlay(generated);
+        return;
       }
+
+      let parsed: { text: string; extraction?: any };
+      try {
+        parsed = await parseFileOnServer(file);
+      } catch (parseErr) {
+        const message = parseErr instanceof Error ? parseErr.message : String(parseErr);
+        const canFallbackToBrowser = /payload|function|server returned html|backend|api route|missing|crashed/i.test(message);
+        if (!canFallbackToBrowser) {
+          throw parseErr;
+        }
+
+        parsed = await parseLargeFileInBrowser(file);
+      }
+
+      await generateQuizFromExtractedText(file, parsed.text, parsed.extraction);
     } catch (err) {
       console.error('[QuizBuilder] file generation failed:', err);
       const detail = err instanceof Error ? err.message : String(err);
@@ -630,9 +1016,16 @@ const QuizBuilder: React.FC = () => {
           category: quizCategory,
           difficulty,
           timer,
+          feedbackMode,
           questions,
+          provider: lastGenerationMeta?.provider || 'manual',
+          status: lastGenerationMeta?.status || 'success',
+          attempts: lastGenerationMeta?.attempts || [],
+          cleanedText: lastGenerationMeta?.cleanedText || extractedText || '',
+          userId: user.uid,
           updatedAt: Timestamp.now(),
         });
+        setShowSupportAfterCreate(false);
         setSuccess('تم حفظ التعديلات بنجاح!');
         setTimeout(() => navigate('/library'), 1500);
       } else {
@@ -643,14 +1036,27 @@ const QuizBuilder: React.FC = () => {
           category: quizCategory,
           difficulty,
           timer,
+          feedbackMode,
           questions,
+          provider: lastGenerationMeta?.provider || 'manual',
+          status: lastGenerationMeta?.status || 'success',
+          attempts: lastGenerationMeta?.attempts || [],
+          cleanedText: lastGenerationMeta?.cleanedText || extractedText || '',
+          userId: user.uid,
           authorUid: user.uid,
           createdAt: Timestamp.now(),
         };
 
         await addDoc(collection(db, 'quizzes'), quizData);
+        const shouldShowSupport = localStorage.getItem(SUPPORT_AFTER_CREATE_KEY) !== '1';
+        if (shouldShowSupport) {
+          localStorage.setItem(SUPPORT_AFTER_CREATE_KEY, '1');
+        }
+        setShowSupportAfterCreate(shouldShowSupport);
         setSuccess('تم حفظ الكويز بنجاح! جاري الانتقال...');
-        setTimeout(() => navigate('/library'), 1500);
+        if (!shouldShowSupport) {
+          setTimeout(() => navigate('/library'), 1500);
+        }
       }
     } catch (err: any) {
       console.error('Failed to save quiz:', err);
@@ -663,6 +1069,20 @@ const QuizBuilder: React.FC = () => {
   const handleExportPdf = async () => {
     if (questions.length === 0) {
       setError('Please add at least one question before exporting PDF');
+      return;
+    }
+
+    const invalidQuestionIndex = questions.findIndex(question =>
+      question.type === 'multiple-choice' && getPdfQuestionOptions(question).length < 4
+    );
+    if (invalidQuestionIndex >= 0) {
+      setError(`السؤال رقم ${invalidQuestionIndex + 1} لا يحتوي على 4 اختيارات مكتوبة. أضف الاختيارات أولاً ثم حمّل ملف PDF.`);
+      return;
+    }
+
+    const missingAnswerIndex = questions.findIndex(question => !getPdfQuestionAnswer(question).text);
+    if (missingAnswerIndex >= 0) {
+      setError(`السؤال رقم ${missingAnswerIndex + 1} لا يحتوي على إجابة صحيحة محددة. اختر الإجابة الصحيحة قبل تحميل ملف PDF.`);
       return;
     }
 
@@ -817,8 +1237,20 @@ const QuizBuilder: React.FC = () => {
                 <h3 className="text-2xl font-bold text-gray-900">تم بنجاح</h3>
                 <p className="text-lg text-indigo-600 font-bold">{success}</p>
               </div>
+              {showSupportAfterCreate && (
+                <SupportCTA
+                  variant="inline"
+                  message="❤️ لو الكويز ساعدك في المذاكرة، تقدر تدعم المشروع ليستمر"
+                />
+              )}
               <button
-                onClick={() => setSuccess(null)}
+                onClick={() => {
+                  setSuccess(null);
+                  if (showSupportAfterCreate) {
+                    setShowSupportAfterCreate(false);
+                    navigate('/library');
+                  }
+                }}
                 className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
               >
                 حسناً
@@ -915,6 +1347,7 @@ const QuizBuilder: React.FC = () => {
                     ))}
                   </div>
                 </div>
+                <FeedbackModeControl value={feedbackMode} onChange={setFeedbackMode} />
               </div>
             </div>
 
@@ -943,12 +1376,12 @@ const QuizBuilder: React.FC = () => {
               {/* CSV Import Modal */}
               <AnimatePresence>
                 {showCsvImport && (
-                  <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+                  <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto overscroll-contain bg-black/50 p-4 backdrop-blur-sm sm:items-center">
                     <motion.div
                       initial={{ opacity: 0, scale: 0.95 }}
                       animate={{ opacity: 1, scale: 1 }}
                       exit={{ opacity: 0, scale: 0.95 }}
-                      className="bg-white rounded-3xl p-6 sm:p-8 shadow-2xl max-w-2xl w-full space-y-6"
+                      className="my-4 max-h-[calc(100dvh-2rem)] w-full max-w-2xl space-y-6 overflow-y-auto overscroll-contain rounded-3xl bg-white p-6 shadow-2xl sm:my-0 sm:p-8"
                     >
                       <div className="flex items-center justify-between">
                         <div className="flex items-center space-x-3">
@@ -969,14 +1402,46 @@ const QuizBuilder: React.FC = () => {
                         <div className="bg-blue-50 border border-blue-100 p-4 rounded-xl text-xs text-blue-700 space-y-1">
                           <p className="font-bold">التنسيق المطلوب:</p>
                           <p>Question, Option1, Option2, Option3, Option4, Correct</p>
+                          <div className="mt-3 space-y-3 rounded-xl bg-white p-3 text-blue-900">
+                            <p className="font-bold">شرح الطريقة الأدق للمستخدم:</p>
+                            <p className="font-mono text-[11px]">Question,Option1,Option2,Option3,Option4,Correct</p>
+                            <p>كل سطر بعد العنوان يمثل سؤالًا واحدًا فقط. عمود Correct يحدد رقم الإجابة الصحيحة: 0 للاختيار الأول، 1 للثاني، 2 للثالث، 3 للرابع.</p>
+                            <p>إذا كان السؤال أو الاختيار يحتوي على فاصلة، ضعه بين علامتي اقتباس " " حتى لا ينقسم إلى أعمدة غلط.</p>
+                            <pre className="overflow-x-auto rounded-lg bg-blue-50 p-3 text-[11px] leading-5 text-blue-950">{`Question,Option1,Option2,Option3,Option4,Correct
+"Before surgery, the patient must have:","Written consent","Blood transfusion","Physiotherapy","Isolation",0
+"During a seizure, the nurse should first:","Insert an object into the mouth","Leave the patient alone","Stay with the patient and note the time","Force the patient to sit",2`}</pre>
+                          </div>
                           <p>بحيث يكون Correct رقم من 0 إلى 3</p>
                         </div>
                         
+                        <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-4 space-y-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-bold text-emerald-800">برومبت جاهز للنسخ</p>
+                              <p className="text-xs text-emerald-700">انسخه للذكاء الاصطناعي، ثم الصق النص الناتج في مربع CSV بالأسفل.</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => navigator.clipboard?.writeText(CSV_FORMAT_PROMPT)}
+                              className="inline-flex flex-shrink-0 items-center rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-emerald-700"
+                            >
+                              <Copy className="mr-1.5 h-3.5 w-3.5" />
+                              نسخ
+                            </button>
+                          </div>
+                          <textarea
+                            readOnly
+                            value={CSV_FORMAT_PROMPT}
+                            className="h-44 w-full resize-y overflow-auto rounded-lg border border-emerald-100 bg-white p-3 text-xs leading-5 text-emerald-950 outline-none"
+                            dir="auto"
+                          />
+                        </div>
+
                         <textarea
                           value={csvText}
                           onChange={(e) => setCsvText(e.target.value)}
                           placeholder="Question, Option1, Option2, Option3, Option4, Correct..."
-                          className="w-full h-64 p-4 bg-gray-50 border border-gray-200 rounded-2xl text-sm font-mono focus:ring-2 focus:ring-amber-500 outline-none transition-all resize-none"
+                          className="h-64 w-full resize-y overflow-auto rounded-2xl border border-gray-200 bg-gray-50 p-4 font-mono text-sm outline-none transition-all focus:ring-2 focus:ring-amber-500"
                         />
                       </div>
 
@@ -1105,6 +1570,7 @@ const QuizBuilder: React.FC = () => {
                     ))}
                   </div>
                 </div>
+                <FeedbackModeControl value={feedbackMode} onChange={setFeedbackMode} />
               </div>
             </div>
 
@@ -1233,6 +1699,11 @@ const QuizBuilder: React.FC = () => {
                     placeholder="Paste your text here to generate a quiz..."
                     className="w-full px-4 py-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all h-64 resize-none bg-white"
                   />
+                  {manualDetectedQuestionCount > numQuestions && (
+                    <p className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800">
+                      Detected about {manualDetectedQuestionCount} question-like items in the pasted text, so generation will preserve that coverage instead of stopping at {numQuestions}.
+                    </p>
+                  )}
 
                   {/* Notes Section */}
                   <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">

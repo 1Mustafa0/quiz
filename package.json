@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "node tools/update-sitemap.cjs && vite build",
+    "indexnow": "node tools/submit-indexnow.cjs",
     "start": "tsx server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist",

@@ -2,6 +2,7 @@ import React, { useEffect, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from './AuthContext';
 import { trackVisit } from './utils/visitorTracking';
+import { useLanguage } from './contexts/LanguageContext';
 import Layout from './components/Layout';
 import Home from './pages/Home';
 import WelcomeModal from './components/WelcomeModal';
@@ -21,6 +22,8 @@ const pageLoaders = {
   quizHistory: () => import('./pages/QuizHistory'),
   profile: () => import('./pages/Profile'),
   todoList: () => import('./pages/TodoList'),
+  pricing: () => import('./pages/Pricing'),
+  support: () => import('./pages/Support'),
 };
 
 type PageModule = { default: React.ComponentType<any> };
@@ -93,25 +96,31 @@ const AdminDashboard = lazyWithRetry(pageLoaders.adminDashboard);
 const QuizHistory = lazyWithRetry(pageLoaders.quizHistory);
 const Profile = lazyWithRetry(pageLoaders.profile);
 const TodoList = lazyWithRetry(pageLoaders.todoList);
+const Pricing = lazyWithRetry(pageLoaders.pricing);
+const Support = lazyWithRetry(pageLoaders.support);
 
-const PageLoader: React.FC = () => (
-  <motion.div
-    initial={{ opacity: 0 }}
-    animate={{ opacity: 1 }}
-    exit={{ opacity: 0 }}
-    transition={{ duration: 0.2 }}
-    className="flex min-h-[55vh] items-center justify-center"
-  >
-    <div className="flex flex-col items-center space-y-4 rounded-2xl border border-gray-100 bg-white px-8 py-7 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-      <div className="relative h-12 w-12">
-        <div className="absolute inset-0 rounded-full border-4 border-indigo-100 dark:border-indigo-900/50" />
-        <div className="absolute inset-0 animate-spin rounded-full border-4 border-transparent border-t-indigo-600" />
-        <div className="absolute inset-3 rounded-full bg-indigo-50 dark:bg-indigo-900/30" />
+const PageLoader: React.FC = () => {
+  const { t } = useLanguage();
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      className="flex min-h-[55vh] items-center justify-center"
+    >
+      <div className="flex flex-col items-center space-y-4 rounded-2xl border border-gray-100 bg-white px-8 py-7 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div className="relative h-12 w-12">
+          <div className="absolute inset-0 rounded-full border-4 border-indigo-100 dark:border-indigo-900/50" />
+          <div className="absolute inset-0 animate-spin rounded-full border-4 border-transparent border-t-indigo-600" />
+          <div className="absolute inset-3 rounded-full bg-indigo-50 dark:bg-indigo-900/30" />
+        </div>
+        <p className="text-sm font-medium text-gray-600 dark:text-gray-300">{t('app.loading')}</p>
       </div>
-      <p className="text-sm font-medium text-gray-600 dark:text-gray-300">جاري التحميل...</p>
-    </div>
-  </motion.div>
-);
+    </motion.div>
+  );
+};
 
 const ScrollToTop: React.FC = () => {
   const { pathname } = useLocation();
@@ -137,6 +146,25 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
 
   if (!user) {
     return <Navigate to="/" replace />;
+  }
+
+  return <Suspense fallback={<PageLoader />}>{children}</Suspense>;
+};
+
+const PaidFeatureRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user, role, plan, loading } = useAuth();
+
+  if (loading) {
+    return <PageLoader />;
+  }
+
+  if (!user) {
+    return <Navigate to="/" replace />;
+  }
+
+  const hasAccess = role === 'admin' || plan === 'pro' || plan === 'premium';
+  if (!hasAccess) {
+    return <Navigate to="/pricing?feature=mindmaps" replace />;
   }
 
   return <Suspense fallback={<PageLoader />}>{children}</Suspense>;
@@ -182,6 +210,22 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Home />} />
             <Route
+              path="/pricing"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <Pricing />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/support"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <Support />
+                </Suspense>
+              }
+            />
+            <Route
               path="/builder"
               element={
                 <ProtectedRoute>
@@ -210,6 +254,14 @@ export default function App() {
               element={
                 <ProtectedRoute>
                   <QuizPlayer />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/review/:resultId"
+              element={
+                <ProtectedRoute>
+                  <QuizPlayer reviewMode />
                 </ProtectedRoute>
               }
             />
@@ -272,25 +324,25 @@ export default function App() {
             <Route
               path="/mindmaps"
               element={
-                <ProtectedRoute>
+                <PaidFeatureRoute>
                   <MindMapLibrary />
-                </ProtectedRoute>
+                </PaidFeatureRoute>
               }
             />
             <Route
               path="/mindmaps/builder"
               element={
-                <ProtectedRoute>
+                <PaidFeatureRoute>
                   <MindMapBuilder />
-                </ProtectedRoute>
+                </PaidFeatureRoute>
               }
             />
             <Route
               path="/mindmaps/editor/:docId?"
               element={
-                <ProtectedRoute>
+                <PaidFeatureRoute>
                   <MindMapEditor />
-                </ProtectedRoute>
+                </PaidFeatureRoute>
               }
             />
             <Route path="*" element={<Navigate to="/" replace />} />

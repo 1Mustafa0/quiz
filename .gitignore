@@ -10,3 +10,5 @@ coverage/
 .users.json
 .visitors.json
 .shared-quizzes.json
+
+.vercel

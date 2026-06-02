@@ -22,6 +22,7 @@ const officeParser = (officeParserImport as any).default || officeParserImport;
 import { parse as csvParse } from 'csv-parse/sync';
 import { generateMindMap, generateMindMapFromContent } from './src/services/mindmapService';
 import { generateQuizFromContent } from './src/services/geminiService';
+import { adminAccess, getPlanById, pricingPlans, type PlanId } from './src/config/pricing';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
@@ -447,6 +448,47 @@ function parseJsonIfPossible(value: string): any | null {
   }
 }
 
+function decodeXmlText(value: string): string {
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_match, code) => String.fromCharCode(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_match, code) => String.fromCharCode(parseInt(code, 16)));
+}
+
+async function extractPptxTextFromZip(buffer: Buffer): Promise<string> {
+  const zip = await JSZip.loadAsync(buffer);
+  const slideFiles = Object.values(zip.files)
+    .filter(file => !file.dir && /^ppt\/slides\/slide\d+\.xml$/i.test(file.name))
+    .sort((a, b) => {
+      const left = Number(a.name.match(/slide(\d+)\.xml/i)?.[1] || 0);
+      const right = Number(b.name.match(/slide(\d+)\.xml/i)?.[1] || 0);
+      return left - right;
+    });
+
+  const slides: string[] = [];
+  for (const [index, file] of slideFiles.entries()) {
+    const xml = await file.async('text');
+    const values = Array.from(xml.matchAll(/<a:t(?:\s[^>]*)?>([^<]*)/g))
+      .map(match => decodeXmlText(match[1]).replace(/\s+/g, ' ').trim())
+      .filter(Boolean);
+
+    const unique: string[] = [];
+    for (const value of values) {
+      if (unique[unique.length - 1] !== value) unique.push(value);
+    }
+
+    if (unique.length > 0) {
+      slides.push(`Slide ${index + 1}\n${unique.join('\n')}`);
+    }
+  }
+
+  return slides.join('\n\n').trim();
+}
+
 function extractMeaningfulOfficeText(extracted: any): string {
   if (typeof extracted === 'string') {
     const parsed = parseJsonIfPossible(extracted);
@@ -466,14 +508,93 @@ function extractMeaningfulOfficeText(extracted: any): string {
 }
 
 function normalizeExtractedFileText(value: string): string {
-  return String(value || '')
+  const lowValueLinePatterns = [
+    /^pptx$/i,
+    /^powerpoint presentation$/i,
+    /^slide$/i,
+    /^heading$/i,
+    /^text$/i,
+    /^paragraph$/i,
+    /^list$/i,
+    /^unordered$/i,
+    /^image$/i,
+    /^justify$/i,
+    /^center$/i,
+    /^left$/i,
+    /^right$/i,
+    /^\d+pt$/i,
+    /^#[0-9a-f]{6}$/i,
+    /^times new roman$/i,
+    /^calibri$/i,
+    /^century gothic$/i,
+    /^\+mj-[a-z]+$/i,
+    /^image\d+\.(png|jpe?g|gif|webp)$/i,
+    /^description:\s*https?:\/\//i,
+    /^https?:\/\//i,
+    /^page\s+\d+:?$/i,
+    /^image\s+\d+:?$/i,
+    /^slide\s+image\s+\d+:?/i,
+    /^camscanner$/i,
+    /^cam\s*3?\s*scanner$/i,
+    /^\(?bc\s+on\s+scanner\)?$/i,
+    /^scanned\s+with\s+camscanner$/i,
+    /^scan(?:ned)?\s+by\s+camscanner$/i,
+  ];
+
+  const hasLetter = (line: string) => /[\p{L}]/u.test(line);
+  const looksLikeOcrDebris = (line: string) => {
+    const compact = line.replace(/\s+/g, '');
+    if (!compact) return true;
+    if (!hasLetter(line)) return true;
+    if (compact.length < 2) return true;
+
+    const letters = (compact.match(/\p{L}/gu) || []).length;
+    const numbers = (compact.match(/\p{N}/gu) || []).length;
+    const questionMarks = (compact.match(/\?/g) || []).length;
+    const symbols = compact.length - letters - numbers;
+    const letterRatio = letters / compact.length;
+    const symbolRatio = symbols / compact.length;
+    const usefulWords = line.match(/[\p{L}]{3,}/gu) || [];
+
+    if (compact.length >= 8 && questionMarks / compact.length > 0.2) return true;
+    if (compact.length >= 8 && usefulWords.length < 2 && symbolRatio > 0.15) return true;
+    return compact.length >= 12 && letterRatio < 0.35 && symbolRatio > 0.25;
+  };
+
+  const lines = String(value || '')
     .replace(/\r\n?/g, '\n')
     .replace(/\u0000/g, '')
+    .replace(/[•●○▪▫]/g, '\n- ')
     .split('\n')
-    .map(line => line.replace(/[ \t\f\v]+/g, ' ').trim())
+    .map(line => line
+      .replace(/[|~_=]{2,}/g, ' ')
+      .replace(/[ \t\f\v]+/g, ' ')
+      .replace(/\s+([,.;:!?])/g, '$1')
+      .trim()
+    )
+    .filter(line => line && !lowValueLinePatterns.some(pattern => pattern.test(line)))
+    .filter(line => !looksLikeOcrDebris(line));
+
+  const counts = new Map<string, number>();
+  for (const line of lines) {
+    const key = line.toLowerCase();
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+
+  const cleanedLines = lines.filter(line => {
+    const count = counts.get(line.toLowerCase()) || 0;
+    return !(line.length <= 40 && count >= 5 && count / Math.max(lines.length, 1) > 0.25);
+  });
+
+  return cleanedLines
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function hasEnoughUsefulOcrText(text: string): boolean {
+  const usefulWords = text.match(/[\p{L}]{3,}/gu) || [];
+  return text.length >= 25 && usefulWords.length >= 4;
 }
 
 function formatCsvRecordsForPreview(records: any[]): string {
@@ -579,8 +700,8 @@ async function extractPdfImageOcr(buffer: Buffer): Promise<{ text: string; pageC
 
     for (const [index, imageBuffer] of pageImages.entries()) {
       const pageOcr = await extractWithBestOcr(imageBuffer, 'image/png', 'pdf-images');
-      const pageText = pageOcr.text;
-      if (pageText.trim()) {
+      const pageText = normalizeExtractedFileText(pageOcr.text);
+      if (hasEnoughUsefulOcrText(pageText)) {
         ocrPageCount += 1;
         ocrChars += pageText.trim().length;
         ocrMethod = ocrMethod && ocrMethod !== pageOcr.method ? 'mixed-ocr-pdf-images' : pageOcr.method;
@@ -698,7 +819,7 @@ const IMAGE_MIME_TYPES = new Set([
   'image/gif', 'image/bmp', 'image/tiff'
 ]);
 
-const MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024;
+const MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024;
 
 interface ExtractionDiagnostics {
   embeddedImageCount?: number;
@@ -763,7 +884,7 @@ interface UserRecord {
   displayName: string;
   photoURL?: string | null;
   role: string;
-  plan: 'free';
+  plan: PlanId;
   createdAt: string;
 }
 
@@ -801,6 +922,7 @@ interface SharedQuizRecord {
   description?: string;
   category?: string;
   difficulty?: string;
+  feedbackMode?: 'end' | 'per-question';
   timer: number;
   questions: any[];
   ownerUid: string;
@@ -920,6 +1042,57 @@ function privateDetails(isOwner: boolean, details: string, publicDetails: string
   return isOwner ? details : publicDetails;
 }
 
+function normalizePlanId(plan: unknown): PlanId {
+  return pricingPlans.some(item => item.id === plan) ? plan as PlanId : 'free';
+}
+
+function resolvePlanForUser(user: { email?: string | null; plan?: unknown; role?: string | null }) {
+  if ((user.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase() || user.role === 'admin') {
+    return {
+      plan: 'premium' as PlanId,
+      adminAccess,
+      limits: adminAccess.limits,
+    };
+  }
+
+  const planId = normalizePlanId(user.plan);
+  return {
+    plan: planId,
+    adminAccess: null,
+    limits: getPlanById(planId).limits,
+  };
+}
+
+const QUIZ_RATE_LIMIT_WINDOW_MS = Number(process.env.QUIZ_RATE_LIMIT_WINDOW_MS || 24 * 60 * 60 * 1000);
+const QUIZ_RATE_LIMIT_MAX = Number(process.env.QUIZ_RATE_LIMIT_MAX || 0);
+const quizRateLimits = new Map<string, number[]>();
+
+function enforceQuizRateLimit(tokenUser: { uid: string; email: string }, ip: string) {
+  if ((tokenUser.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase()) return;
+
+  const existing = userStore.get(tokenUser.uid);
+  const plan = getPlanById(existing?.plan || 'free');
+  const planDailyLimit = plan.limits.aiQuizzesPerDay === 'unlimited'
+    ? Number.POSITIVE_INFINITY
+    : plan.limits.aiQuizzesPerDay;
+  const maxRequests = QUIZ_RATE_LIMIT_MAX > 0
+    ? Math.min(QUIZ_RATE_LIMIT_MAX, planDailyLimit)
+    : planDailyLimit;
+  const key = tokenUser.uid || ip || 'anonymous';
+  const now = Date.now();
+  const windowStart = now - QUIZ_RATE_LIMIT_WINDOW_MS;
+  const recent = (quizRateLimits.get(key) || []).filter(timestamp => timestamp > windowStart);
+
+  if (recent.length >= maxRequests) {
+    const error = new Error('تم الوصول للحد اليومي لإنشاء الكويزات. حاول لاحقًا.');
+    (error as any).statusCode = 429;
+    throw error;
+  }
+
+  recent.push(now);
+  quizRateLimits.set(key, recent);
+}
+
 // Global error handlers to prevent process crashes
 process.on('uncaughtException', (err) => {
   console.error('UNCAUGHT EXCEPTION:', err);
@@ -931,9 +1104,9 @@ process.on('unhandledRejection', (reason, promise) => {
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_UPLOAD_SIZE_BYTES } });
 
-async function startServer() {
+export async function createApp(options: { serveClient?: boolean } = {}) {
+  const { serveClient = true } = options;
   const app = express();
-  const PORT = Number(process.env.PORT || 5000);
 
   // Vite middleware for development
   const isProduction = process.env.NODE_ENV === 'production';
@@ -993,7 +1166,7 @@ async function startServer() {
         displayName: displayName || existing?.displayName || '',
         photoURL: photoURL !== undefined ? photoURL : (existing?.photoURL ?? null),
         role: resolvedRole,
-        plan: 'free',
+        plan: resolvedRole === 'admin' ? 'premium' : normalizePlanId(existing?.plan || firestoreProfile?.plan),
         createdAt: existing?.createdAt || new Date().toISOString(),
       });
       saveUsersStore();
@@ -1027,7 +1200,7 @@ async function startServer() {
                 displayName: d.displayName || '',
                 photoURL: d.photoURL || null,
                 role: d.role || 'user',
-                plan: 'free',
+                plan: d.role === 'admin' ? 'premium' : normalizePlanId(d.plan || existing?.plan),
                 createdAt: d.createdAt || existing?.createdAt || new Date().toISOString(),
               });
             }
@@ -1054,7 +1227,22 @@ async function startServer() {
       const tokenUser = await verifyFirebaseToken(idToken);
       if (!tokenUser) return res.status(401).json({ error: 'invalid token' });
       
-      res.json({ plan: 'free' });
+      const existing = userStore.get(tokenUser.uid);
+      const firestoreProfile = await fetchFirestoreDocument('users', tokenUser.uid, idToken).catch(() => null);
+      const role = tokenUser.email === ADMIN_EMAIL || firestoreProfile?.role === 'admin'
+        ? 'admin'
+        : existing?.role || 'user';
+      const resolved = resolvePlanForUser({
+        email: tokenUser.email,
+        role,
+        plan: firestoreProfile?.plan || existing?.plan,
+      });
+
+      res.json({
+        plan: resolved.plan,
+        adminAccess: resolved.adminAccess,
+        limits: resolved.limits,
+      });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -1067,14 +1255,14 @@ async function startServer() {
       if (!idToken) return res.status(401).json({ error: 'unauthorized' });
       const tokenUser = await verifyFirebaseToken(idToken);
       if (!tokenUser || !(await tokenUserIsAdmin(tokenUser, idToken))) return res.status(403).json({ error: 'forbidden' });
-      const { uid } = req.body || {};
+      const { uid, plan } = req.body || {};
       if (!uid) return res.status(400).json({ error: 'uid required' });
+      const nextPlan = normalizePlanId(plan);
       const existing = userStore.get(uid);
       if (!existing) return res.status(404).json({ error: 'user not found' });
-      userStore.set(uid, { ...existing, plan: 'free' });
+      userStore.set(uid, { ...existing, plan: existing.role === 'admin' ? 'premium' : nextPlan });
       saveUsersStore();
-      console.log(`[set-plan] ignored for ${uid}; all features are free`);
-      res.json({ ok: true, uid, plan: 'free' });
+      res.json({ ok: true, uid, plan: existing.role === 'admin' ? 'premium' : nextPlan });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -1141,6 +1329,7 @@ async function startServer() {
         description: quiz.description || '',
         category: quiz.category || 'General',
         difficulty: quiz.difficulty || 'medium',
+        feedbackMode: quiz.feedbackMode === 'per-question' ? 'per-question' : 'end',
         timer: Number(quiz.timer ?? 10),
         questions: quiz.questions,
         ownerUid: tokenUser.uid,
@@ -1172,6 +1361,7 @@ async function startServer() {
         description: shared.description || '',
         category: shared.category || 'General',
         difficulty: shared.difficulty || 'medium',
+        feedbackMode: shared.feedbackMode === 'per-question' ? 'per-question' : 'end',
         timer: shared.timer,
         questions: shared.questions,
       },
@@ -1217,7 +1407,7 @@ async function startServer() {
         displayName: profileData.displayName || '',
         photoURL: profileData.photoURL || null,
         role: safeRole,
-        plan: 'free',
+        plan: safeRole === 'admin' ? 'premium' : 'free',
         createdAt: now,
       });
       saveUsersStore();
@@ -1230,6 +1420,7 @@ async function startServer() {
         displayName: { stringValue: profileData.displayName || '' },
         photoURL:    profileData.photoURL ? { stringValue: profileData.photoURL } : { nullValue: null },
         role:        { stringValue: safeRole },
+        plan:        { stringValue: safeRole === 'admin' ? 'premium' : 'free' },
         createdAt:   { timestampValue: now },
       };
 
@@ -1261,6 +1452,7 @@ async function startServer() {
       status: 'ok', 
       message: 'Server is running', 
       hasGeminiKey: hasKey,
+      hasGroqKey: !!process.env.GROQ_API_KEY,
     });
   });
 
@@ -1271,6 +1463,7 @@ async function startServer() {
       if (!idToken) return res.status(401).json({ error: 'unauthorized' });
       const tokenUser = await verifyFirebaseToken(idToken);
       if (!tokenUser) return res.status(401).json({ error: 'invalid token' });
+      enforceQuizRateLimit(tokenUser, req.ip);
 
       const { content, image, numQuestions, language, difficulty, notes } = req.body || {};
       if (!content && !image) {
@@ -1281,7 +1474,12 @@ async function startServer() {
       res.json(quiz);
     } catch (e: any) {
       console.error('[generate-quiz] error:', e?.message || e);
-      res.status(Number(e?.statusCode) || 500).json({ error: e?.message || 'Failed to generate quiz' });
+      const status = Number(e?.statusCode) || (/json|schema|invalid/i.test(e?.message || '') ? 502 : 500);
+      res.status(status).json({
+        error: e?.message || 'Failed to generate quiz',
+        code: e?.code || (status === 502 ? 'AI_RESPONSE_INVALID' : 'QUIZ_GENERATION_FAILED'),
+        details: status === 502 ? 'The model response could not be converted into the required quiz JSON schema.' : undefined,
+      });
     }
   });
 
@@ -1326,6 +1524,23 @@ async function startServer() {
         return res.status(400).json({ error: 'No file uploaded', details: 'لم يتم رفع أي ملف.' });
       }
 
+      const idToken = getBearerToken(req);
+      const tokenUser = idToken ? await verifyFirebaseToken(idToken) : null;
+      const existingUser = tokenUser ? userStore.get(tokenUser.uid) : null;
+      const userPlan = tokenUser
+        ? resolvePlanForUser({ email: tokenUser.email, role: existingUser?.role, plan: existingUser?.plan })
+        : resolvePlanForUser({ plan: 'free' });
+      const planLimits: any = userPlan.limits === 'unlimited' ? null : userPlan.limits;
+      const maxFileSizeMB = planLimits?.maxFileSizeMB === 'unlimited' || !planLimits
+        ? Number.POSITIVE_INFINITY
+        : Number(planLimits.maxFileSizeMB);
+      if (req.file.size > maxFileSizeMB * 1024 * 1024) {
+        return res.status(413).json({
+          error: 'File too large for current plan',
+          details: `Your current plan allows files up to ${maxFileSizeMB} MB.`,
+        });
+      }
+
       const { mimetype, buffer, originalname } = req.file;
       const lowerName = originalname.toLowerCase();
       console.log(`Processing file: ${originalname}, size: ${buffer.length} bytes, type: ${mimetype}`);
@@ -1354,7 +1569,7 @@ async function startServer() {
         allowUtf8Fallback = false;
         try {
           const data = await pdfParser(buffer);
-          text = data?.text || '';
+          text = normalizeExtractedFileText(data?.text || '');
           console.log('PDF extraction result length:', text.length);
           if (text.trim().length < 100) {
             console.log('PDF text too short — likely scanned. Rendering pages to images for OCR...');
@@ -1415,8 +1630,18 @@ async function startServer() {
         extractionMethod = 'office-parser';
         allowUtf8Fallback = false;
         try {
+          if (originalname.toLowerCase().endsWith('.pptx')) {
+            try {
+              console.log('Using PPTX zip text extractor');
+              text = await extractPptxTextFromZip(buffer);
+              if (text) extractionMethod = 'pptx-zip-text';
+            } catch (pptxErr) {
+              console.error('PPTX zip extraction failed, falling back to officeParser:', pptxErr);
+            }
+          }
+
           // Special handling for .docx which mammoth handles better
-          if (originalname.toLowerCase().endsWith('.docx')) {
+          if (!text && originalname.toLowerCase().endsWith('.docx')) {
             try {
               console.log('Using mammoth for .docx');
               const result = await mammoth.extractRawText({ buffer });
@@ -1625,36 +1850,47 @@ async function startServer() {
 
   console.log(`Server starting in ${isProduction ? 'production' : 'development'} mode`);
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== 'production') {
-    console.log('Using Vite middleware for serving assets');
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    if (fs.existsSync(distPath)) {
-      console.log('Serving static assets from dist directory');
-      app.use(express.static(distPath));
-      app.get('*', (req, res) => {
-        res.sendFile(path.join(distPath, 'index.html'));
-      });
-    } else {
-      console.error('Production mode enabled but dist directory not found!');
-      // Fallback to Vite if dist is missing even in production
+  if (serveClient) {
+    // Vite middleware for development
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('Using Vite middleware for serving assets');
       const vite = await createViteServer({
         server: { middlewareMode: true },
         appType: 'spa',
       });
       app.use(vite.middlewares);
+    } else {
+      const distPath = path.join(process.cwd(), 'dist');
+      if (fs.existsSync(distPath)) {
+        console.log('Serving static assets from dist directory');
+        app.use(express.static(distPath));
+        app.get('*', (req, res) => {
+          res.sendFile(path.join(distPath, 'index.html'));
+        });
+      } else {
+        console.error('Production mode enabled but dist directory not found!');
+        // Fallback to Vite if dist is missing even in production
+        const vite = await createViteServer({
+          server: { middlewareMode: true },
+          appType: 'spa',
+        });
+        app.use(vite.middlewares);
+      }
     }
   }
+
+  return app;
+}
+
+async function startServer() {
+  const app = await createApp({ serveClient: true });
+  const PORT = Number(process.env.PORT || 5000);
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }
 
-startServer();
+if (process.env.VERCEL !== '1') {
+  startServer();
+}

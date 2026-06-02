@@ -15,7 +15,7 @@ import { formatExtractedTextPreview } from '../utils/extractedText';
 
 type InputMode = 'topic' | 'file';
 
-const MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024;
+const MAX_UPLOAD_SIZE_BYTES = 4 * 1024 * 1024;
 const ACCEPTED_FILE_TYPES = [
   '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.csv',
   '.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tif', '.tiff',

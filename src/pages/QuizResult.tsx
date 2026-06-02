@@ -1,21 +1,36 @@
 import React, { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { doc, getDoc } from 'firebase/firestore';
-import { AlertCircle, CheckCircle2, XCircle, Trophy, RotateCcw, Library, ChevronDown, ChevronUp, MessageSquare, Bookmark } from 'lucide-react';
+import { AlertCircle, CheckCircle2, XCircle, Trophy, RotateCcw, Library, ChevronDown, ChevronUp, MessageSquare, Bookmark, Target, TrendingUp, Lightbulb, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import SupportCTA from '../components/SupportCTA';
+import { buildResultInsights } from '../utils/quizInsights';
 
 interface AnswerResult {
   question: string;
   userAnswer: string;
   correctAnswer: string;
+  options?: string[];
+  type?: 'multiple-choice' | 'true-false' | 'short-answer';
+  difficulty?: 'easy' | 'medium' | 'hard';
+  topic_tag?: string;
   isCorrect: boolean;
   feedback: string;
   isMarked?: boolean;
 }
 
+const difficultyStyles = {
+  easy: 'bg-green-50 text-green-700 border-green-200',
+  medium: 'bg-amber-50 text-amber-700 border-amber-200',
+  hard: 'bg-red-50 text-red-700 border-red-200',
+};
+
 interface Result {
   quizId: string;
+  quizTitle?: string;
+  category?: string;
+  feedbackMode?: 'end' | 'per-question';
   score: number;
   totalQuestions: number;
   answers: AnswerResult[];
@@ -24,6 +39,7 @@ interface Result {
 
 const QuizResult: React.FC = () => {
   const { resultId } = useParams<{ resultId: string }>();
+  const navigate = useNavigate();
   const [result, setResult] = useState<Result | null>(null);
   const [loading, setLoading] = useState(true);
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
@@ -70,7 +86,16 @@ const QuizResult: React.FC = () => {
     );
   }
 
-  const percentage = Math.round((result.score / result.totalQuestions) * 100);
+  const safeTotalQuestions = Math.max(0, Number(result.totalQuestions) || 0);
+  const safeScore = Math.max(0, Number(result.score) || 0);
+  const safeResult = {
+    ...result,
+    score: safeScore,
+    totalQuestions: safeTotalQuestions,
+    answers: Array.isArray(result.answers) ? result.answers : [],
+  };
+  const percentage = safeTotalQuestions > 0 ? Math.round((safeScore / safeTotalQuestions) * 100) : 0;
+  const insights = buildResultInsights(safeResult);
   
   const getFeedback = () => {
     if (percentage >= 90) return { message: 'ممتاز 🔥', color: 'text-green-600', bg: 'bg-green-50' };
@@ -79,6 +104,12 @@ const QuizResult: React.FC = () => {
   };
 
   const feedback = getFeedback();
+  const canReviewMistakes = insights.incorrectAnswers.some(answer => (answer.options || []).length > 0);
+
+  const handleReviewMistakes = () => {
+    if (!resultId || !canReviewMistakes) return;
+    navigate(`/review/${resultId}`);
+  };
 
   return (
     <div className="max-w-4xl mx-auto space-y-12 pb-20">
@@ -103,11 +134,22 @@ const QuizResult: React.FC = () => {
         <div className="space-y-2">
           <h2 className={`text-2xl sm:text-3xl font-bold ${feedback.color}`}>{feedback.message}</h2>
           <p className="text-gray-600 text-base sm:text-lg">
-            لقد أجبت على <span className="font-bold text-gray-900">{result.score}</span> من أصل <span className="font-bold text-gray-900">{result.totalQuestions}</span> أسئلة بشكل صحيح.
+            لقد أجبت على <span className="font-bold text-gray-900">{safeScore}</span> من أصل <span className="font-bold text-gray-900">{safeTotalQuestions}</span> أسئلة بشكل صحيح.
           </p>
         </div>
 
         <div className="flex flex-col sm:flex-row justify-center items-center gap-4 pt-4">
+          {insights.incorrectAnswers.length > 0 && (
+            <button
+              onClick={handleReviewMistakes}
+              disabled={!canReviewMistakes}
+              className="w-full sm:w-auto inline-flex items-center justify-center px-8 py-4 bg-amber-500 text-white rounded-xl font-bold hover:bg-amber-600 shadow-lg transition-all disabled:cursor-not-allowed disabled:opacity-50"
+              title={canReviewMistakes ? 'راجع الأسئلة التي أخطأت فيها فقط' : 'هذه النتيجة قديمة ولا تحتوي على اختيارات الأسئلة'}
+            >
+              <RefreshCw className="w-5 h-5 mr-2" />
+              راجع أخطائي
+            </button>
+          )}
           <Link
             to={`/play/${result.quizId}`}
             className="w-full sm:w-auto inline-flex items-center justify-center px-8 py-4 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 shadow-lg transition-all"
@@ -125,11 +167,45 @@ const QuizResult: React.FC = () => {
         </div>
       </motion.div>
 
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+          <div className="flex items-center gap-2 text-green-600 font-bold mb-3">
+            <TrendingUp className="w-5 h-5" />
+            نقاط القوة
+          </div>
+          <ul className="space-y-2 text-sm text-gray-600">
+            {insights.strengths.map((item, index) => <li key={index}>{item}</li>)}
+          </ul>
+        </div>
+        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+          <div className="flex items-center gap-2 text-red-600 font-bold mb-3">
+            <Target className="w-5 h-5" />
+            نقاط الضعف
+          </div>
+          <ul className="space-y-2 text-sm text-gray-600">
+            {insights.weaknesses.map((item, index) => <li key={index}>{item}</li>)}
+          </ul>
+        </div>
+        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+          <div className="flex items-center gap-2 text-indigo-600 font-bold mb-3">
+            <Lightbulb className="w-5 h-5" />
+            نصيحة المراجعة
+          </div>
+          <p className="text-sm text-gray-600 leading-6">{insights.advice}</p>
+          <div className="mt-4 rounded-xl bg-indigo-50 px-3 py-2 text-sm font-bold text-indigo-700">
+            أكثر موضوع يحتاج مراجعة: {insights.weakTopic}
+          </div>
+        </div>
+      </div>
+
+      <SupportCTA message="If this quiz helped you study, you can support the project ❤️" />
+
       {/* Detailed Review */}
+      {safeResult.feedbackMode !== 'per-question' && (
       <div className="space-y-6">
         <h3 className="text-xl sm:text-2xl font-bold text-gray-900">مراجعة الإجابات</h3>
         <div className="space-y-4">
-          {result.answers.map((ans, index) => (
+          {safeResult.answers.map((ans, index) => (
             <motion.div
               key={index}
               initial={{ opacity: 0, x: -20 }}
@@ -148,6 +224,11 @@ const QuizResult: React.FC = () => {
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
                       <p className="font-bold text-gray-900 leading-tight text-sm sm:text-base">{ans.question}</p>
+                      {ans.difficulty && (
+                        <span className={`inline-flex rounded-md border px-2 py-0.5 text-[10px] font-bold uppercase ${difficultyStyles[ans.difficulty]}`}>
+                          {ans.difficulty}
+                        </span>
+                      )}
                       {ans.isMarked && (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-50 text-amber-600 border border-amber-100">
                           <Bookmark className="w-3 h-3 mr-1 fill-current" />
@@ -182,6 +263,7 @@ const QuizResult: React.FC = () => {
                       <MessageSquare className="w-5 h-5 text-indigo-500 mt-1 flex-shrink-0" />
                       <div className="space-y-1">
                         <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">توضيح</span>
+                        {ans.topic_tag && <p className="text-xs font-bold text-gray-500">{ans.topic_tag}</p>}
                         <p className="text-gray-700 text-sm italic">{ans.feedback}</p>
                       </div>
                     </div>
@@ -192,6 +274,7 @@ const QuizResult: React.FC = () => {
           ))}
         </div>
       </div>
+      )}
     </div>
   );
 };

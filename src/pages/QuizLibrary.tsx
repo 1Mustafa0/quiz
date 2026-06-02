@@ -7,7 +7,7 @@ import { Play, Trash2, Clock, BookOpen, BarChart, Search, Filter, Plus, Pencil, 
 import { motion, AnimatePresence } from 'motion/react';
 import ConfirmModal from '../components/ConfirmModal';
 import { ownerOnlyError } from '../utils/owner';
-import { exportQuizToPdf } from '../utils/quizPdf';
+import { exportQuizToPdf, getPdfQuestionAnswer, getPdfQuestionOptions } from '../utils/quizPdf';
 import { getCategoryTone, normalizeCategory, sortCategories } from '../utils/categories';
 
 interface Quiz {
@@ -16,6 +16,7 @@ interface Quiz {
   description: string;
   category: string;
   difficulty: string;
+  feedbackMode?: 'end' | 'per-question';
   questions: any[];
   timer: number;
   createdAt: any;
@@ -105,6 +106,7 @@ const QuizLibrary: React.FC = () => {
         description: quiz.description || '',
         category: quiz.category || 'General',
         difficulty: quiz.difficulty || 'medium',
+        feedbackMode: quiz.feedbackMode === 'per-question' ? 'per-question' : 'end',
         timer: Number(quiz.timer || 0),
         questions: quiz.questions,
         ownerUid: user.uid,
@@ -128,6 +130,20 @@ const QuizLibrary: React.FC = () => {
     }
   };
   const handleExportPdf = async (quiz: Quiz) => {
+    const invalidQuestionIndex = (quiz.questions || []).findIndex(question =>
+      (question?.type || 'multiple-choice') === 'multiple-choice' && getPdfQuestionOptions(question).length < 4
+    );
+    if (invalidQuestionIndex >= 0) {
+      window.alert(`السؤال رقم ${invalidQuestionIndex + 1} لا يحتوي على 4 اختيارات محفوظة. افتح الكويز من زر Edit وأضف الاختيارات ثم حمّل PDF جديد.`);
+      return;
+    }
+
+    const missingAnswerIndex = (quiz.questions || []).findIndex(question => !getPdfQuestionAnswer(question).text);
+    if (missingAnswerIndex >= 0) {
+      window.alert(`السؤال رقم ${missingAnswerIndex + 1} لا يحتوي على إجابة صحيحة محفوظة. افتح الكويز من زر Edit واختر الإجابة الصحيحة ثم حمّل PDF جديد.`);
+      return;
+    }
+
     setExportingQuizId(quiz.id);
     try {
       const downloaded = await exportQuizToPdf(quiz);

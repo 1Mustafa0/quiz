@@ -1,5 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface ProgressBarProps {
   progress: number; // 0-100
@@ -78,9 +79,10 @@ interface LoadingOverlayProps {
 
 export const LoadingOverlay: React.FC<LoadingOverlayProps> = ({
   loading,
-  message = 'جاري التحميل...',
+  message,
   fullScreen = false,
 }) => {
+  const { t } = useLanguage();
   if (!loading) return null;
 
   return (
@@ -95,7 +97,7 @@ export const LoadingOverlay: React.FC<LoadingOverlayProps> = ({
     >
       <div className="flex flex-col items-center gap-4">
         <Spinner size="lg" />
-        {message && <p className="text-sm text-gray-600 dark:text-gray-400 font-medium">{message}</p>}
+        <p className="text-sm text-gray-600 dark:text-gray-400 font-medium">{message || t('app.loading')}</p>
       </div>
     </motion.div>
   );

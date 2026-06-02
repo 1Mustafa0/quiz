@@ -3,9 +3,12 @@ import { auth, loginWithGoogle, logout } from './firebaseAuth';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { OWNER_EMAIL } from './utils/owner';
 
+type PlanId = 'free' | 'starter' | 'pro' | 'premium';
+
 interface AuthContextType {
   user: User | null;
   role: string | null;
+  plan: PlanId | null;
   loading: boolean;
   loginLoading: boolean;
   loginError: string | null;
@@ -22,6 +25,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [role, setRole] = useState<string | null>(null);
+  const [plan, setPlan] = useState<PlanId | null>(null);
   const [loading, setLoading] = useState(true);
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
@@ -33,6 +37,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (firebaseUser) {
         const isOwner = firebaseUser.email === OWNER_EMAIL;
         let userRole: string = isOwner ? 'admin' : 'user';
+        let userPlan: PlanId = isOwner ? 'premium' : 'free';
 
         try {
           const [{ db }, { doc, getDoc, setDoc, Timestamp }] = await Promise.all([
@@ -44,6 +49,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const existingData = userDoc?.exists() ? userDoc.data() : null;
 
           userRole = isOwner ? 'admin' : (existingData?.role || 'user');
+          userPlan = isOwner ? 'premium' : ((existingData?.plan || 'free') as PlanId);
 
           await setDoc(userRef, {
             uid: firebaseUser.uid,
@@ -51,6 +57,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             displayName: firebaseUser.displayName || '',
             photoURL: firebaseUser.photoURL || null,
             role: userRole,
+            plan: userPlan,
             createdAt: existingData?.createdAt || Timestamp.now(),
             lastLoginAt: Timestamp.now(),
           }, { merge: true });
@@ -63,9 +70,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           console.error('Auth profile error:', err);
         }
 
+        try {
+          const token = await firebaseUser.getIdToken();
+          const response = await fetch('/api/user/plan', {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (response.ok) {
+            const data = await response.json();
+            userPlan = (data?.plan || userPlan) as PlanId;
+          }
+        } catch (err: any) {
+          console.warn('[AuthContext] plan fetch failed:', err?.message || err);
+        }
+
         setRole(userRole);
+        setPlan(userPlan);
       } else {
         setRole(null);
+        setPlan(null);
       }
 
       setUser(firebaseUser);
@@ -96,12 +118,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await logout();
     setUser(null);
     setRole(null);
+    setPlan(null);
   };
 
   return (
     <AuthContext.Provider value={{
       user,
       role,
+      plan,
       loading,
       loginLoading,
       loginError,

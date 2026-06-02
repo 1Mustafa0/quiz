@@ -1,34 +1,112 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
-import { LogIn, LogOut, PlusCircle, Library, Home as HomeIcon, AlertCircle, Shield, History, User, Brain, Menu, X, CheckSquare, Sun, Moon, Loader2 } from 'lucide-react';
+import { useLanguage } from '../contexts/LanguageContext';
+import { LogIn, LogOut, PlusCircle, Library, Home as HomeIcon, AlertCircle, Shield, History, User, Brain, Menu, X, CheckSquare, Sun, Moon, Loader2, PlayCircle, Languages } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
+const QUIZ_PROGRESS_PREFIX = 'ai-quiz-master-progress';
+const QUIZ_PROGRESS_EVENT = 'ai-quiz-master-progress-updated';
+
+interface SavedProgressSummary {
+  key: string;
+  mode: 'quiz' | 'public';
+  id: string;
+  path: string;
+  answeredCount: number;
+  questionCount: number;
+  updatedAt: number;
+}
+
+const getSavedProgressSummaries = (userId?: string | null): SavedProgressSummary[] => {
+  if (typeof window === 'undefined') return [];
+
+  const summaries: SavedProgressSummary[] = [];
+
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (!key?.startsWith(`${QUIZ_PROGRESS_PREFIX}:`)) continue;
+
+    const [owner, mode, ...idParts] = key.slice(QUIZ_PROGRESS_PREFIX.length + 1).split(':');
+    const id = idParts.join(':');
+    if (!id || (userId ? owner !== userId : owner !== 'guest')) continue;
+    if (mode !== 'quiz' && mode !== 'public') continue;
+
+    try {
+      const progress = JSON.parse(localStorage.getItem(key) || '{}') as {
+        userAnswers?: string[];
+        questionCount?: number;
+        updatedAt?: number;
+      };
+      const questionCount = Math.max(0, Number(progress.questionCount) || 0);
+      const userAnswers = Array.isArray(progress.userAnswers) ? progress.userAnswers : [];
+      const answeredCount = userAnswers.filter(answer => String(answer || '').trim()).length;
+      if (questionCount <= 0 || answeredCount <= 0) continue;
+
+      summaries.push({
+        key,
+        mode,
+        id,
+        path: mode === 'public' ? `/exam/${id}` : `/play/${id}`,
+        answeredCount,
+        questionCount,
+        updatedAt: Number(progress.updatedAt) || 0,
+      });
+    } catch {
+      localStorage.removeItem(key);
+    }
+  }
+
+  return summaries.sort((left, right) => right.updatedAt - left.updatedAt);
+};
+
 const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user, role, login, logout, isQuizActive, loginLoading, loginError } = useAuth();
+  const { user, role, plan, login, logout, isQuizActive, loginLoading, loginError } = useAuth();
   const { isDark, toggleTheme } = useTheme();
+  const { language, direction, toggleLanguage, t } = useLanguage();
   const location = useLocation();
   const navigate = useNavigate();
   const [pendingPath, setPendingPath] = useState<string | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [savedProgress, setSavedProgress] = useState<SavedProgressSummary | null>(null);
 
   const navItems = [
-    { name: 'Home', path: '/', icon: HomeIcon },
-    { name: 'Quiz Builder', path: '/builder', icon: PlusCircle, protected: true },
-    { name: 'My Quizzes', path: '/library', icon: Library, protected: true },
-    { name: 'Mind Maps', path: '/mindmaps', icon: Brain, protected: true },
-    { name: 'Tasks', path: '/tasks', icon: CheckSquare, protected: true },
-    { name: 'History', path: '/history', icon: History, protected: true },
-    { name: 'Profile', path: '/profile', icon: User, protected: true },
-    { name: 'Admin', path: '/admin', icon: Shield, protected: true, adminOnly: true },
+    { labelKey: 'nav.home' as const, path: '/', icon: HomeIcon },
+    { labelKey: 'nav.quizBuilder' as const, path: '/builder', icon: PlusCircle, protected: true },
+    { labelKey: 'nav.myQuizzes' as const, path: '/library', icon: Library, protected: true },
+    { labelKey: 'nav.mindMaps' as const, path: '/mindmaps', icon: Brain, protected: true, paidFeature: true },
+    { labelKey: 'nav.tasks' as const, path: '/tasks', icon: CheckSquare, protected: true },
+    { labelKey: 'nav.history' as const, path: '/history', icon: History, protected: true },
+    { labelKey: 'nav.profile' as const, path: '/profile', icon: User, protected: true },
+    { labelKey: 'nav.admin' as const, path: '/admin', icon: Shield, protected: true, adminOnly: true },
   ];
 
-  const handleNavClick = (path: string) => {
+  const hasPaidAccess = role === 'admin' || plan === 'pro' || plan === 'premium';
+
+  useEffect(() => {
+    const refreshSavedProgress = () => {
+      const [latest] = getSavedProgressSummaries(user?.uid);
+      setSavedProgress(latest || null);
+    };
+
+    refreshSavedProgress();
+    window.addEventListener('storage', refreshSavedProgress);
+    window.addEventListener('focus', refreshSavedProgress);
+    window.addEventListener(QUIZ_PROGRESS_EVENT, refreshSavedProgress);
+    return () => {
+      window.removeEventListener('storage', refreshSavedProgress);
+      window.removeEventListener('focus', refreshSavedProgress);
+      window.removeEventListener(QUIZ_PROGRESS_EVENT, refreshSavedProgress);
+    };
+  }, [user?.uid, location.pathname]);
+
+  const handleNavClick = (path: string, paidFeature = false) => {
+    const targetPath = paidFeature && !hasPaidAccess ? '/pricing?feature=mindmaps' : path;
     if (isQuizActive && location.pathname !== path) {
-      setPendingPath(path);
+      setPendingPath(targetPath);
     } else {
-      navigate(path);
+      navigate(targetPath);
     }
   };
 
@@ -45,37 +123,51 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     });
   };
 
+  const shouldShowProgressAlert = Boolean(
+    user &&
+    savedProgress &&
+    location.pathname !== savedProgress.path &&
+    !location.pathname.startsWith('/result/')
+  );
+
+  const dismissSavedProgress = () => {
+    if (!savedProgress) return;
+    localStorage.removeItem(savedProgress.key);
+    setSavedProgress(null);
+  };
+
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-slate-900 flex flex-col transition-colors duration-300">
+    <div className="min-h-screen bg-gray-50 dark:bg-slate-900 flex flex-col transition-colors duration-300" dir={direction}>
       <nav role="navigation" aria-label="Main navigation" className="bg-white dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700 sticky top-0 z-50 transition-colors duration-300">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex items-center">
+          <div className="flex h-16 items-center gap-3">
+            <div className="flex min-w-0 flex-1 items-center gap-3">
               <div
                 onClick={() => handleNavClick('/')}
-                className="flex items-center space-x-2 cursor-pointer group"
+                className="group flex flex-shrink-0 cursor-pointer items-center gap-2"
               >
                 <motion.div
                   whileHover={{ y: -1, rotate: -2 }}
                   whileTap={{ scale: 0.96 }}
-                  className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center group-hover:bg-indigo-700 transition-all shadow-sm group-hover:shadow-md"
+                  className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-600 shadow-sm transition-all group-hover:bg-indigo-700 group-hover:shadow-md"
                 >
-                  <Brain className="text-white w-6 h-6" />
+                  <Brain className="h-5 w-5 text-white" />
                 </motion.div>
-                <span className="text-xl font-bold text-gray-900 dark:text-white tracking-tight">AI Quiz Master</span>
+                <span className="hidden whitespace-nowrap text-lg font-bold tracking-tight text-gray-900 dark:text-white xl:block">AI Quiz Master</span>
               </div>
-              <div className="hidden lg:ml-8 lg:flex lg:space-x-4">
+              <div className="hidden min-w-0 flex-1 items-center justify-start gap-1 overflow-x-auto xl:flex custom-scrollbar">
                 {navItems.map((item) => {
                   if (item.protected && !user) return null;
                   if (item.adminOnly && role !== 'admin') return null;
                   const isActive = location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(item.path));
                   return (
                     <motion.button
-                      key={item.name}
-                      onClick={() => handleNavClick(item.path)}
+                      key={item.labelKey}
+                      onClick={() => handleNavClick(item.path, Boolean(item.paidFeature))}
                       aria-current={isActive ? 'page' : undefined}
                       whileTap={{ scale: 0.97 }}
-                      className={`relative inline-flex items-center overflow-hidden px-3 py-2 text-sm font-medium rounded-xl transition-colors ${
+                      title={t(item.labelKey)}
+                      className={`relative inline-flex h-10 flex-shrink-0 items-center overflow-hidden rounded-lg px-2.5 text-sm font-medium transition-colors 2xl:px-3 ${
                         isActive
                           ? 'text-indigo-600 dark:text-indigo-400'
                           : 'text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200 hover:bg-gray-100 dark:hover:bg-slate-700'
@@ -84,57 +176,67 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                       {isActive && (
                         <motion.span
                           layoutId="desktop-active-nav"
-                          className="absolute inset-0 rounded-xl bg-indigo-50 dark:bg-indigo-900/40"
+                          className="absolute inset-0 rounded-lg bg-indigo-50 dark:bg-indigo-900/40"
                           transition={{ duration: 0.16, ease: 'easeOut' }}
                         />
                       )}
-                      <span className="relative inline-flex items-center">
-                        <item.icon className="w-4 h-4 mr-2" />
-                        {item.name}
+                      <span className="relative inline-flex items-center gap-1.5 whitespace-nowrap">
+                        <item.icon className="h-4 w-4 flex-shrink-0" />
+                        <span className="hidden 2xl:inline">{t(item.labelKey)}</span>
                       </span>
                     </motion.button>
                   );
                 })}
               </div>
             </div>
-            <div className="flex items-center space-x-2 sm:space-x-3">
+            <div className="flex flex-shrink-0 items-center gap-2 sm:gap-3">
 
               {/* Dark Mode Toggle */}
               <button
                 onClick={toggleTheme}
-                className="p-2 rounded-lg text-gray-500 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors"
-                title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+                className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 dark:text-slate-400 dark:hover:bg-slate-700"
+                title={isDark ? t('theme.light') : t('theme.dark')}
               >
                 {isDark ? <Sun className="w-5 h-5 text-yellow-400" /> : <Moon className="w-5 h-5" />}
               </button>
 
+              <button
+                onClick={toggleLanguage}
+                className="inline-flex h-10 items-center gap-2 rounded-lg px-2 text-sm font-bold text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white sm:px-3"
+                title={t('common.language')}
+              >
+                <Languages className="h-4 w-4" />
+                <span>{language === 'ar' ? 'EN' : 'ع'}</span>
+              </button>
+
               {user ? (
-                <div className="flex items-center space-x-2 sm:space-x-3">
+                <div className="flex items-center gap-2 sm:gap-3">
                   <button
                     onClick={() => handleNavClick('/profile')}
-                    className="flex items-center space-x-2 hover:bg-gray-100 dark:hover:bg-slate-700 p-1.5 rounded-lg transition-colors"
+                    className="flex max-w-[12rem] items-center gap-2 rounded-lg p-1.5 transition-colors hover:bg-gray-100 dark:hover:bg-slate-700"
                   >
                     <img
                       src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName}`}
                       alt="Profile"
-                      className="w-8 h-8 rounded-full border border-gray-200 dark:border-slate-600"
+                      className="h-8 w-8 flex-shrink-0 rounded-full border border-gray-200 dark:border-slate-600"
                       referrerPolicy="no-referrer"
                     />
-                    <span className="hidden md:block text-sm font-medium text-gray-700 dark:text-slate-300">
+                    <span className="hidden max-w-24 truncate text-sm font-medium text-gray-700 dark:text-slate-300 2xl:block">
                       {user.displayName}
                     </span>
                     {role === 'admin' && (
-                      <span className="hidden sm:inline-block bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider">
-                        Admin
+                      <span className="hidden rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300 2xl:inline-block">
+                        {t('nav.admin')}
                       </span>
                     )}
                   </button>
                   <button
                     onClick={() => logout()}
-                    className="hidden sm:inline-flex items-center px-3 py-2 text-sm font-medium text-gray-700 dark:text-slate-300 hover:text-gray-900 dark:hover:text-white transition-colors"
+                    className="hidden h-10 items-center rounded-lg px-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white sm:inline-flex 2xl:px-3"
+                    title={t('auth.logout')}
                   >
-                    <LogOut className="w-4 h-4 mr-2" />
-                    Logout
+                    <LogOut className="h-4 w-4 2xl:me-2" />
+                    <span className="hidden 2xl:inline">{t('auth.logout')}</span>
                   </button>
                 </div>
               ) : (
@@ -144,16 +246,16 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   aria-busy={loginLoading}
                   className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 disabled:cursor-not-allowed shadow-sm transition-all"
                 >
-                  {loginLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <LogIn className="w-4 h-4 mr-2" />}
-                  <span className="hidden sm:inline">{loginLoading ? 'Signing in...' : 'Sign In'}</span>
-                  <span className="sm:hidden">{loginLoading ? '...' : 'Login'}</span>
+                  {loginLoading ? <Loader2 className="w-4 h-4 me-2 animate-spin" /> : <LogIn className="w-4 h-4 me-2" />}
+                  <span className="hidden sm:inline">{loginLoading ? t('auth.signingIn') : t('auth.signIn')}</span>
+                  <span className="sm:hidden">{loginLoading ? '...' : t('auth.login')}</span>
                 </button>
               )}
 
               {/* Mobile Menu Button */}
               <button
                 onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-                className="lg:hidden p-2 rounded-md text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200 hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors"
+                className="xl:hidden p-2 rounded-md text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-slate-200 hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors"
               >
                 {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
               </button>
@@ -168,7 +270,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
-              className="lg:hidden border-t border-gray-100 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden"
+              className="xl:hidden border-t border-gray-100 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden"
             >
               <div className="px-4 pt-2 pb-6 space-y-1">
                 {navItems.map((item, index) => {
@@ -177,9 +279,9 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   const isActive = location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(item.path));
                   return (
                     <motion.button
-                      key={item.name}
+                      key={item.labelKey}
                       onClick={() => {
-                        handleNavClick(item.path);
+                        handleNavClick(item.path, Boolean(item.paidFeature));
                         setIsMobileMenuOpen(false);
                       }}
                       initial={{ opacity: 0, x: -8 }}
@@ -192,8 +294,8 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                           : 'text-gray-600 dark:text-slate-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-slate-700'
                       }`}
                     >
-                      <item.icon className={`w-5 h-5 mr-4 ${isActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-slate-500'}`} />
-                      {item.name}
+                      <item.icon className={`w-5 h-5 me-4 ${isActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-slate-500'}`} />
+                      {t(item.labelKey)}
                     </motion.button>
                   );
                 })}
@@ -205,8 +307,8 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                     }}
                     className="flex items-center w-full px-4 py-3 text-base font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-all"
                   >
-                    <LogOut className="w-5 h-5 mr-4" />
-                    Logout
+                    <LogOut className="w-5 h-5 me-4" />
+                    {t('auth.logout')}
                   </button>
                 )}
               </div>
@@ -215,11 +317,46 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         </AnimatePresence>
       </nav>
 
-      <div className="border-b border-indigo-100 bg-indigo-50/80 px-4 py-2 text-center text-sm font-semibold text-indigo-700 dark:border-indigo-900/50 dark:bg-indigo-950/30 dark:text-indigo-300" dir="rtl">
-        <span className="inline-flex items-center justify-center gap-2">
-          <span className="text-base leading-none">😊</span>
-          <span>متنساش تصلّي على النبي</span>
-          <span className="text-indigo-500">♥</span>
+      <AnimatePresence>
+        {shouldShowProgressAlert && savedProgress && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-100"
+            role="status"
+            dir={direction}
+          >
+            <div className="mx-auto flex max-w-7xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-2 text-sm font-semibold">
+                <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                <span>
+                  {t('progress.saved', { answered: savedProgress.answeredCount, total: savedProgress.questionCount })}
+                </span>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <button
+                  onClick={() => handleNavClick(savedProgress.path)}
+                  className="inline-flex items-center justify-center rounded-lg bg-amber-500 px-4 py-2 text-sm font-bold text-white shadow-sm transition-colors hover:bg-amber-600"
+                >
+                  <PlayCircle className="me-2 h-4 w-4" />
+                  {t('progress.resume')}
+                </button>
+                <button
+                  onClick={dismissSavedProgress}
+                  className="inline-flex items-center justify-center rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-bold text-amber-800 transition-colors hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100 dark:hover:bg-amber-900"
+                >
+                  {t('common.cancel')}
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="border-b border-indigo-100 bg-indigo-50/80 px-4 py-2 text-center text-sm font-semibold text-indigo-700 dark:border-indigo-900/50 dark:bg-indigo-950/30 dark:text-indigo-300" dir={direction}>
+        <span className="inline-flex flex-wrap items-center justify-center gap-x-2 gap-y-1">
+          <span>{t('footer.prayer')}</span>
         </span>
       </div>
 
@@ -250,7 +387,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-gray-500 dark:text-slate-400 text-sm space-y-2">
           <p>© 2026 Mostafa. All rights reserved.</p>
           <p>
-            للتواصل:{' '}
+            {t('footer.contact')}{' '}
             <a
               href="mailto:mstfyalswdany913@gmail.com"
               className="font-semibold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300"
@@ -276,21 +413,21 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 <AlertCircle className="w-8 h-8" />
               </div>
               <div className="space-y-2">
-                <h3 className="text-2xl font-bold text-gray-900 dark:text-white">الخروج من الكويز؟</h3>
-                <p className="text-gray-600 dark:text-slate-400">هل تريد الخروج قبل إتمام الكويز؟ لن يتم حفظ تقدمك.</p>
+                <h3 className="text-2xl font-bold text-gray-900 dark:text-white">{t('quiz.exitTitle')}</h3>
+                <p className="text-gray-600 dark:text-slate-400">{t('quiz.exitMessage')}</p>
               </div>
               <div className="flex gap-4">
                 <button
                   onClick={() => setPendingPath(null)}
                   className="flex-1 px-6 py-3 bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-slate-300 rounded-xl font-semibold hover:bg-gray-200 dark:hover:bg-slate-600 transition-all"
                 >
-                  البقاء
+                  {t('quiz.stay')}
                 </button>
                 <button
                   onClick={confirmExit}
                   className="flex-1 px-6 py-3 bg-red-600 text-white rounded-xl font-semibold hover:bg-red-700 transition-all"
                 >
-                  الخروج
+                  {t('quiz.exit')}
                 </button>
               </div>
             </motion.div>

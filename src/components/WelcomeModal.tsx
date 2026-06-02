@@ -1,6 +1,7 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Sparkles, CheckCircle2, X } from 'lucide-react';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface WelcomeModalProps {
   isOpen: boolean;
@@ -9,6 +10,9 @@ interface WelcomeModalProps {
 }
 
 const WelcomeModal: React.FC<WelcomeModalProps> = ({ isOpen, onClose, userName }) => {
+  const { direction, t } = useLanguage();
+  const firstName = userName?.split(' ')[0] || t('welcome.heroName');
+
   return (
     <AnimatePresence>
       {isOpen && (
@@ -18,6 +22,7 @@ const WelcomeModal: React.FC<WelcomeModalProps> = ({ isOpen, onClose, userName }
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.8, y: 40 }}
             className="bg-white rounded-[2.5rem] p-10 shadow-2xl max-w-md w-full text-center space-y-8 border border-gray-100 relative overflow-hidden"
+            dir={direction}
           >
             {/* Decorative background elements */}
             <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500" />
@@ -37,14 +42,14 @@ const WelcomeModal: React.FC<WelcomeModalProps> = ({ isOpen, onClose, userName }
 
             <div className="space-y-4 relative">
               <h2 className="text-3xl font-black text-gray-900 tracking-tight">
-                أهلاً بك يا {userName?.split(' ')[0] || 'بطل'}! 👋
+                {t('welcome.title', { name: firstName })}
               </h2>
               <div className="space-y-2">
                 <p className="text-xl text-gray-600 leading-relaxed">
-                  سعداء جداً بانضمامك إلينا في رحلة التعلم الذكي.
+                  {t('welcome.message')}
                 </p>
                 <p className="text-2xl text-indigo-600 font-bold animate-bounce mt-4">
-                  صل على النبي بقا ❤️
+                  {t('welcome.prayer')}
                 </p>
               </div>
             </div>
@@ -54,13 +59,13 @@ const WelcomeModal: React.FC<WelcomeModalProps> = ({ isOpen, onClose, userName }
                 onClick={onClose}
                 className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold text-lg hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-200 active:scale-95"
               >
-                ابدأ رحلتك الآن
+                {t('welcome.start')}
               </button>
             </div>
 
             <div className="flex items-center justify-center space-x-2 text-gray-400 text-sm">
               <CheckCircle2 className="w-4 h-4" />
-              <span>تم إنشاء حسابك بنجاح</span>
+              <span>{t('welcome.created')}</span>
             </div>
           </motion.div>
         </div>
