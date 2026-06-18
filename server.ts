@@ -1066,6 +1066,31 @@ function resolvePlanForUser(user: { email?: string | null; plan?: unknown; role?
 const QUIZ_RATE_LIMIT_WINDOW_MS = Number(process.env.QUIZ_RATE_LIMIT_WINDOW_MS || 24 * 60 * 60 * 1000);
 const QUIZ_RATE_LIMIT_MAX = Number(process.env.QUIZ_RATE_LIMIT_MAX || 0);
 const quizRateLimits = new Map<string, number[]>();
+const apiRateLimits = new Map<string, number[]>();
+
+function enforceSimpleRateLimit(options: {
+  bucket: string;
+  key: string;
+  maxRequests: number;
+  windowMs: number;
+  message: string;
+}) {
+  if (!Number.isFinite(options.maxRequests) || options.maxRequests <= 0) return;
+
+  const now = Date.now();
+  const windowStart = now - options.windowMs;
+  const mapKey = `${options.bucket}:${options.key || 'anonymous'}`;
+  const recent = (apiRateLimits.get(mapKey) || []).filter(timestamp => timestamp > windowStart);
+
+  if (recent.length >= options.maxRequests) {
+    const error = new Error(options.message);
+    (error as any).statusCode = 429;
+    throw error;
+  }
+
+  recent.push(now);
+  apiRateLimits.set(mapKey, recent);
+}
 
 function enforceQuizRateLimit(tokenUser: { uid: string; email: string }, ip: string) {
   if ((tokenUser.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase()) return;
@@ -1092,6 +1117,11 @@ function enforceQuizRateLimit(tokenUser: { uid: string; email: string }, ip: str
   recent.push(now);
   quizRateLimits.set(key, recent);
 }
+
+const MINDMAP_RATE_LIMIT_WINDOW_MS = Number(process.env.MINDMAP_RATE_LIMIT_WINDOW_MS || 60 * 60 * 1000);
+const MINDMAP_RATE_LIMIT_MAX = Number(process.env.MINDMAP_RATE_LIMIT_MAX || 500);
+const FILE_PARSE_RATE_LIMIT_WINDOW_MS = Number(process.env.FILE_PARSE_RATE_LIMIT_WINDOW_MS || 60 * 60 * 1000);
+const FILE_PARSE_RATE_LIMIT_MAX = Number(process.env.FILE_PARSE_RATE_LIMIT_MAX || 500);
 
 // Global error handlers to prevent process crashes
 process.on('uncaughtException', (err) => {
@@ -1139,6 +1169,10 @@ export async function createApp(options: { serveClient?: boolean } = {}) {
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
+  });
+  app.all('/api/track-visit', (req, res) => {
+    res.setHeader('Allow', 'POST');
+    res.status(405).json({ error: 'Method not allowed' });
   });
 
   // ── Sync user to local store on every sign-in ──────────────────
@@ -1489,6 +1523,13 @@ export async function createApp(options: { serveClient?: boolean } = {}) {
       if (!idToken) return res.status(401).json({ error: 'unauthorized' });
       const tokenUser = await verifyFirebaseToken(idToken);
       if (!tokenUser) return res.status(401).json({ error: 'invalid token' });
+      enforceSimpleRateLimit({
+        bucket: 'mindmap',
+        key: tokenUser.uid || req.ip,
+        maxRequests: MINDMAP_RATE_LIMIT_MAX,
+        windowMs: MINDMAP_RATE_LIMIT_WINDOW_MS,
+        message: 'تم الوصول للحد المؤقت لإنشاء الخرائط الذهنية. حاول لاحقًا.',
+      });
 
       const { topic, content, filename } = req.body || {};
       if (typeof topic === 'string' && topic.trim().length > 0) {
@@ -1519,6 +1560,14 @@ export async function createApp(options: { serveClient?: boolean } = {}) {
     let isOwnerRequest = false;
     
     try {
+      enforceSimpleRateLimit({
+        bucket: 'parse-file',
+        key: getBearerToken(req) || req.ip,
+        maxRequests: FILE_PARSE_RATE_LIMIT_MAX,
+        windowMs: FILE_PARSE_RATE_LIMIT_WINDOW_MS,
+        message: 'تم الوصول للحد المؤقت لمعالجة الملفات. حاول لاحقًا.',
+      });
+
       isOwnerRequest = await requestIsOwner(req);
       if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded', details: 'لم يتم رفع أي ملف.' });
@@ -1846,6 +1895,10 @@ export async function createApp(options: { serveClient?: boolean } = {}) {
         'حدث خطأ داخلي. حاول مرة أخرى لاحقاً.'
       ),
     });
+  });
+
+  app.use('/api', (req, res) => {
+    res.status(404).json({ error: 'API route not found' });
   });
 
   console.log(`Server starting in ${isProduction ? 'production' : 'development'} mode`);

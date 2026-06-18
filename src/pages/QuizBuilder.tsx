@@ -1,17 +1,18 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { collection, addDoc, updateDoc, doc, getDoc, Timestamp } from 'firebase/firestore';
 import type { GeneratedQuestion } from '../services/geminiService';
-import { Upload, FileText, Plus, Trash2, Save, Sparkles, Loader2, AlertCircle, CheckCircle2, ArrowLeft, Pencil, MessageSquarePlus, ChevronDown, Download, Copy } from 'lucide-react';
+import { Upload, FileText, Plus, Trash2, Save, Sparkles, Loader2, AlertCircle, CheckCircle2, ArrowLeft, Pencil, MessageSquarePlus, ChevronDown, Download, Copy, X } from 'lucide-react';
+import { CardSkeleton } from '../components/Skeleton';
 import { motion, AnimatePresence } from 'motion/react';
 import SupportCTA from '../components/SupportCTA';
 import ConfirmModal from '../components/ConfirmModal';
 import CategorySelect from '../components/CategorySelect';
 import ExtractedTextPreview from '../components/ExtractedTextPreview';
 import { ownerOnlyError } from '../utils/owner';
-import { exportQuizToPdf, getPdfQuestionAnswer, getPdfQuestionOptions } from '../utils/quizPdf';
+import { exportQuizToPdf, getPdfQuestionAnswer, getPdfQuestionOptions, preloadQuizPdfExporter } from '../utils/quizPdf';
 import { normalizeCategory } from '../utils/categories';
 import { formatExtractedTextPreview } from '../utils/extractedText';
 
@@ -25,27 +26,57 @@ const ACCEPTED_FILE_TYPES = [
   '.txt', '.js', '.ts', '.tsx', '.jsx', '.py', '.java', '.cpp', '.c', '.html', '.css', '.md', '.json',
 ].join(',');
 
-const CSV_FORMAT_PROMPT = `حوّل النص التالي إلى أسئلة اختيار من متعدد بصيغة CSV فقط، بدون أي شرح إضافي.
+const CSV_FORMAT_PROMPT = `حوّل النص التالي إلى أسئلة اختيار من متعدد بالتنسيق النصي التالي فقط، بدون CSV وبدون أي شرح إضافي.
 
-التنسيق المطلوب بالضبط:
-Question,Option1,Option2,Option3,Option4,Correct
+التنسيق المطلوب بالضبط لكل سؤال:
+Question 1: نص السؤال
+1. الاختيار الأول
+2. الاختيار الثاني
+3. الاختيار الثالث
+4. الاختيار الرابع
+Correct: رقم الإجابة الصحيحة من 1 إلى 4
 
 القواعد:
-- كل سطر بعد العنوان يمثل سؤالًا واحدًا فقط.
-- كل سؤال يجب أن يحتوي على 4 اختيارات فقط.
-- عمود Correct يجب أن يكون رقمًا من 0 إلى 3.
-- 0 يعني Option1، و1 يعني Option2، و2 يعني Option3، و3 يعني Option4.
-- إذا كان السؤال أو أي اختيار يحتوي على فاصلة، ضعه بين علامتي اقتباس " " حتى لا ينقسم إلى أعمدة خاطئة.
-- لا تستخدم ترقيمًا أو نقاطًا أو Markdown.
-- لا تكتب أي نص قبل أو بعد CSV.
+- اكتب كل اختيار في سطر منفصل.
+- افصل بين كل سؤال والسؤال التالي بسطر فارغ.
+- رقّم الأسئلة تصاعديًا في سطر السؤال مثل Question 1 ثم Question 2 ثم Question 3.
+- لا تضع رقم السؤال داخل نص السؤال نفسه؛ الرقم للتنظيم فقط وسيتم تجاهله عند الاستيراد.
+- Correct يجب أن يكون رقما فقط من 1 إلى 4.
+- رقم 1 يعني الاختيار الأول، ورقم 2 يعني الاختيار الثاني، ورقم 3 يعني الاختيار الثالث، ورقم 4 يعني الاختيار الرابع.
+- لا تستخدم جداول أو CSV أو Markdown.
+- لا تكتب أي نص قبل أو بعد الأسئلة.
 
 مثال على التنسيق الصحيح:
-Question,Option1,Option2,Option3,Option4,Correct
-"Before surgery, the patient must have:","Written consent","Blood transfusion","Physiotherapy","Isolation",0
-"During a seizure, the nurse should first:","Insert an object into the mouth","Leave the patient alone","Stay with the patient and note the time","Force the patient to sit",2
+Question 1: Before surgery, the patient must have:
+1. Written consent
+2. Blood transfusion
+3. Physiotherapy
+4. Isolation
+Correct: 1
+
+Question 2: During a seizure, the nurse should first:
+1. Insert an object into the mouth
+2. Leave the patient alone
+3. Stay with the patient and note the time
+4. Force the patient to sit
+Correct: 3
 
 النص المطلوب تحويله:
 `;
+
+const QUESTION_IMPORT_EXAMPLE = `Question 1: Before surgery, the patient must have:
+1. Written consent
+2. Blood transfusion
+3. Physiotherapy
+4. Isolation
+Correct: 1
+
+Question 2: During a seizure, the nurse should first:
+1. Insert an object into the mouth
+2. Leave the patient alone
+3. Stay with the patient and note the time
+4. Force the patient to sit
+Correct: 3`;
 
 const isImageUpload = (file: File) =>
   file.type.startsWith('image/') || /\.(jpe?g|png|webp|gif|bmp|tiff?)$/i.test(file.name);
@@ -306,7 +337,7 @@ const looksLikeCsvHeader = (columns: string[]) => {
 };
 
 const getImportedCorrectIndex = (value: string, options: string[]) => {
-  const clean = value.trim();
+  const clean = normalizeImportLine(value);
   const numeric = Number.parseInt(clean, 10);
   if (!Number.isNaN(numeric)) {
     if (numeric >= 0 && numeric < options.length) return numeric;
@@ -320,7 +351,125 @@ const getImportedCorrectIndex = (value: string, options: string[]) => {
   return answerTextIndex >= 0 ? answerTextIndex : -1;
 };
 
+const normalizeImportLine = (value: string) =>
+  value
+    .replace(/[٠-٩]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+    .replace(/[۰-۹]/g, digit => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+    .replace(/[：]/g, ':')
+    .replace(/[–—]/g, '-')
+    .replace(/[\u200e\u200f\u202a-\u202e]/g, '')
+    .trim();
+
+const getOneBasedCorrectIndex = (value: string, options: string[]) => {
+  const clean = normalizeImportLine(value);
+  const numeric = Number.parseInt(clean, 10);
+  if (!Number.isNaN(numeric) && numeric >= 1 && numeric <= options.length) {
+    return numeric - 1;
+  }
+
+  const letterIndex = ['A', 'B', 'C', 'D'].indexOf(clean.toUpperCase());
+  if (letterIndex >= 0 && letterIndex < options.length) return letterIndex;
+
+  const answerTextIndex = options.findIndex(option => option.trim().toLowerCase() === clean.toLowerCase());
+  return answerTextIndex >= 0 ? answerTextIndex : -1;
+};
+
+const QUESTION_LINE_PATTERN = /^(?:(?:question|q|سؤال|السؤال)\s*\d+|\d+\s*[\).:\-]\s*(?:question|q|سؤال|السؤال)|(?:question|q|سؤال|السؤال))\s*[:.\-)]\s*/i;
+
+const stripQuestionLabel = (line: string) =>
+  normalizeImportLine(line)
+    .replace(QUESTION_LINE_PATTERN, '')
+    .replace(/^\d+\s*[\).:\-]\s*/, '')
+    .trim();
+
+const stripOptionLabel = (line: string) => {
+  const normalized = normalizeImportLine(line);
+  const match = normalized.match(/^(?:option\s*)?([1-4a-d])\s*[\).:\-]\s*(.+)$/i);
+  if (!match) return null;
+
+  return {
+    label: match[1].toUpperCase(),
+    text: match[2].trim(),
+  };
+};
+
+const getBlockCorrectValue = (line: string) => {
+  const normalized = normalizeImportLine(line);
+  const match = normalized.match(/^(?:correct answer|right answer|correct|answer|الإجابة الصحيحة|الاجابة الصحيحة|الإجابة|الاجابة|الصحيح)\s*[:.\-)]?\s*(?:option\s*)?([1-4a-d])\s*$/i);
+  return match?.[1] || '';
+};
+
+const parseQuestionTextBlocks = (text: string): GeneratedQuestion[] => {
+  const lines = text
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map(normalizeImportLine)
+    .filter(Boolean);
+
+  const importedQuestions: GeneratedQuestion[] = [];
+  let questionText = '';
+  let options: string[] = [];
+  let correctValue = '';
+
+  const pushQuestion = () => {
+    if (!questionText || options.length !== 4 || !correctValue) return;
+
+    const correctIndex = getOneBasedCorrectIndex(correctValue, options);
+    if (correctIndex < 0 || correctIndex >= options.length) return;
+
+    importedQuestions.push({
+      type: 'multiple-choice',
+      questionText,
+      options,
+      correctAnswer: options[correctIndex],
+      feedback: '',
+    });
+  };
+
+  for (const line of lines) {
+    const isQuestionLine = QUESTION_LINE_PATTERN.test(line);
+    if (isQuestionLine) {
+      pushQuestion();
+      questionText = stripQuestionLabel(line);
+      options = [];
+      correctValue = '';
+      continue;
+    }
+
+    const option = stripOptionLabel(line);
+    if (option && options.length < 4) {
+      options.push(option.text);
+      continue;
+    }
+
+    const answer = getBlockCorrectValue(line);
+    if (answer) {
+      correctValue = answer;
+      pushQuestion();
+      questionText = '';
+      options = [];
+      correctValue = '';
+      continue;
+    }
+
+    if (questionText && options.length < 4) {
+      options.push(line);
+      continue;
+    }
+
+    if (!questionText && options.length === 0) {
+      questionText = stripQuestionLabel(line);
+    }
+  }
+
+  pushQuestion();
+  return importedQuestions;
+};
+
 const parseImportedCsvQuestions = (text: string): GeneratedQuestion[] => {
+  const blockQuestions = parseQuestionTextBlocks(text);
+  if (blockQuestions.length > 0) return blockQuestions;
+
   const rows = parseCsvRows(text);
   if (rows.length === 0) return [];
 
@@ -354,6 +503,8 @@ const parseImportedCsvQuestions = (text: string): GeneratedQuestion[] => {
 };
 
 const isLikelyQuestionCsv = (text: string) => {
+  if (parseQuestionTextBlocks(text).length > 0) return true;
+
   const rows = parseCsvRows(text);
   if (rows.length < 2) return false;
   if (looksLikeCsvHeader(rows[0])) return true;
@@ -491,6 +642,10 @@ const QuizBuilder: React.FC = () => {
   const isEditing = !!quizId;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    preloadQuizPdfExporter();
+  }, []);
+
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState('');
@@ -549,6 +704,11 @@ const QuizBuilder: React.FC = () => {
 
   const [showCsvImport, setShowCsvImport] = useState(false);
   const [csvText, setCsvText] = useState('');
+  const [importError, setImportError] = useState('');
+  const detectedImportQuestionCount = useMemo(
+    () => (csvText.trim() ? parseImportedCsvQuestions(csvText).length : 0),
+    [csvText]
+  );
   const [isDragging, setIsDragging] = useState(false);
   const [confirmConfig, setConfirmConfig] = useState<{
     isOpen: boolean;
@@ -566,11 +726,12 @@ const QuizBuilder: React.FC = () => {
 
   const handleCsvImport = () => {
     if (!csvText.trim()) return;
+    setImportError('');
     
     try {
       const rows = parseCsvRows(csvText);
       if (rows.length < 1) {
-        setError('يرجى إدخال نص يحتوي على العناوين وسؤال واحد على الأقل.');
+        setImportError('يرجى إدخال نص يحتوي على سؤال واحد على الأقل.');
         return;
       }
 
@@ -582,10 +743,10 @@ const QuizBuilder: React.FC = () => {
         setShowCsvImport(false);
         setCsvText('');
       } else {
-        setError('لم يتم العثور على أسئلة صالحة. تأكد من استخدام الفاصلة (,) للفصل بين الأعمدة.');
+        setImportError('لم يتم العثور على أسئلة صالحة. تأكد أن كل سؤال يحتوي على 4 اختيارات في أسطر منفصلة وسطر Correct برقم من 1 إلى 4.');
       }
     } catch (err) {
-      setError('حدث خطأ أثناء معالجة النص. يرجى التأكد من التنسيق الصحيح.');
+      setImportError('حدث خطأ أثناء معالجة النص. يرجى التأكد من التنسيق الصحيح.');
     }
   };
 
@@ -679,12 +840,12 @@ const QuizBuilder: React.FC = () => {
         if (importedQuestions.length > 0) {
           const importedQuiz = {
             title: title.trim() || 'Imported Quiz',
-            description: `Imported ${importedQuestions.length} questions from CSV text.`,
+            description: `Imported ${importedQuestions.length} questions from formatted text.`,
             questions: importedQuestions,
-            provider: 'csv-import',
+            provider: 'text-import',
             status: 'success',
             cleanedText: cleanManualText,
-            attempts: ['csv-direct-import'],
+            attempts: ['formatted-text-direct-import'],
           };
           setLastGenerationMeta(importedQuiz);
           setTitle(importedQuiz.title);
@@ -834,12 +995,12 @@ const QuizBuilder: React.FC = () => {
       if (importedQuestions.length > 0) {
         const importedQuiz = {
           title: title.trim() || file.name.replace(/\.[^.]+$/, '') || 'Imported Quiz',
-          description: `Imported ${importedQuestions.length} questions from CSV file.`,
+          description: `Imported ${importedQuestions.length} questions from formatted text file.`,
           questions: importedQuestions,
-          provider: 'csv-import',
+          provider: 'text-import',
           status: 'success',
           cleanedText: cleanText,
-          attempts: ['csv-direct-import'],
+          attempts: ['formatted-text-direct-import'],
         };
         setLastGenerationMeta(importedQuiz);
         setTitle(importedQuiz.title);
@@ -1361,7 +1522,7 @@ const QuizBuilder: React.FC = () => {
                     className="inline-flex items-center px-4 py-2 bg-amber-50 border border-amber-100 text-amber-700 rounded-lg font-medium hover:bg-amber-100 transition-colors shadow-sm"
                   >
                     <FileText className="w-4 h-4 mr-2" />
-                    Import CSV
+                    استيراد نص
                   </button>
                   <button
                     onClick={handleAddQuestion}
@@ -1373,91 +1534,143 @@ const QuizBuilder: React.FC = () => {
                 </div>
               </div>
 
-              {/* CSV Import Modal */}
+              {/* Text Import Modal */}
               <AnimatePresence>
                 {showCsvImport && (
-                  <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto overscroll-contain bg-black/50 p-4 backdrop-blur-sm sm:items-center">
+                  <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto overscroll-contain bg-slate-950/55 p-3 backdrop-blur-sm sm:p-5 lg:items-center">
                     <motion.div
                       initial={{ opacity: 0, scale: 0.95 }}
                       animate={{ opacity: 1, scale: 1 }}
                       exit={{ opacity: 0, scale: 0.95 }}
-                      className="my-4 max-h-[calc(100dvh-2rem)] w-full max-w-2xl space-y-6 overflow-y-auto overscroll-contain rounded-3xl bg-white p-6 shadow-2xl sm:my-0 sm:p-8"
+                      className="my-3 max-h-[calc(100dvh-1.5rem)] w-full max-w-5xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-950 sm:my-0"
                     >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-3">
-                          <div className="w-10 h-10 bg-amber-100 text-amber-600 rounded-xl flex items-center justify-center">
+                      <div className="flex items-start justify-between gap-4 border-b border-slate-200 bg-white px-5 py-4 dark:border-slate-800 dark:bg-slate-950 sm:px-6">
+                        <div className="flex min-w-0 items-start gap-3">
+                          <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
                             <FileText className="w-6 h-6" />
                           </div>
-                          <div>
-                            <h3 className="text-xl font-bold text-gray-900">استيراد أسئلة من نص CSV</h3>
-                            <p className="text-sm text-gray-500">انسخ النص المولد من الذكاء الاصطناعي والصقه هنا</p>
+                          <div className="min-w-0">
+                            <h3 className="text-xl font-bold text-slate-950 dark:text-white">استيراد أسئلة من نص منسق</h3>
+                            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">كل اختيار في سطر منفصل، وCorrect برقم من 1 إلى 4.</p>
                           </div>
                         </div>
-                        <button onClick={() => setShowCsvImport(false)} className="text-gray-400 hover:text-gray-600">
-                          <Plus className="w-6 h-6 rotate-45" />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowCsvImport(false);
+                            setImportError('');
+                          }}
+                          className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                          aria-label="إغلاق"
+                        >
+                          <X className="w-5 h-5" />
                         </button>
                       </div>
 
-                      <div className="space-y-4">
-                        <div className="bg-blue-50 border border-blue-100 p-4 rounded-xl text-xs text-blue-700 space-y-1">
-                          <p className="font-bold">التنسيق المطلوب:</p>
-                          <p>Question, Option1, Option2, Option3, Option4, Correct</p>
-                          <div className="mt-3 space-y-3 rounded-xl bg-white p-3 text-blue-900">
-                            <p className="font-bold">شرح الطريقة الأدق للمستخدم:</p>
-                            <p className="font-mono text-[11px]">Question,Option1,Option2,Option3,Option4,Correct</p>
-                            <p>كل سطر بعد العنوان يمثل سؤالًا واحدًا فقط. عمود Correct يحدد رقم الإجابة الصحيحة: 0 للاختيار الأول، 1 للثاني، 2 للثالث، 3 للرابع.</p>
-                            <p>إذا كان السؤال أو الاختيار يحتوي على فاصلة، ضعه بين علامتي اقتباس " " حتى لا ينقسم إلى أعمدة غلط.</p>
-                            <pre className="overflow-x-auto rounded-lg bg-blue-50 p-3 text-[11px] leading-5 text-blue-950">{`Question,Option1,Option2,Option3,Option4,Correct
-"Before surgery, the patient must have:","Written consent","Blood transfusion","Physiotherapy","Isolation",0
-"During a seizure, the nurse should first:","Insert an object into the mouth","Leave the patient alone","Stay with the patient and note the time","Force the patient to sit",2`}</pre>
-                          </div>
-                          <p>بحيث يكون Correct رقم من 0 إلى 3</p>
+                      <div className="max-h-[calc(100dvh-10rem)] overflow-y-auto overscroll-contain bg-slate-50 p-5 dark:bg-slate-900 sm:p-6">
+                        <div className="grid gap-5 lg:grid-cols-[0.95fr_1.25fr]">
+                          <div className="space-y-4">
+                        <div className="grid gap-3">
+                          {[
+                            ['1', 'اكتب السؤال', 'ابدأ كل سؤال بسطر Question:'],
+                            ['2', 'أضف الاختيارات', 'اكتب 4 اختيارات، كل اختيار في سطر.'],
+                            ['3', 'حدد الصحيح', 'اكتب Correct: ثم رقم الإجابة.'],
+                          ].map(([step, label, detail]) => (
+                            <div key={step} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-950">
+                              <div className="mb-2 flex items-center gap-2">
+                                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-amber-100 text-xs font-black text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">{step}</span>
+                                <span className="text-sm font-bold text-slate-900 dark:text-white">{label}</span>
+                              </div>
+                              <p className="text-xs leading-5 text-slate-600 dark:text-slate-400">{detail}</p>
+                            </div>
+                          ))}
                         </div>
-                        
-                        <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-4 space-y-3">
-                          <div className="flex items-center justify-between gap-3">
+
+                        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-950">
+                          <div className="mb-3 flex items-center justify-between gap-3">
                             <div>
-                              <p className="text-sm font-bold text-emerald-800">برومبت جاهز للنسخ</p>
-                              <p className="text-xs text-emerald-700">انسخه للذكاء الاصطناعي، ثم الصق النص الناتج في مربع CSV بالأسفل.</p>
+                              <p className="text-sm font-bold text-slate-950 dark:text-white">مثال صحيح</p>
+                              <p className="text-xs text-slate-500 dark:text-slate-400">لاحظ أن رقم 2 يعني الاختيار الثاني، وليس الثالث.</p>
+                            </div>
+                          </div>
+                          <pre className="max-h-64 overflow-auto rounded-lg border border-slate-200 bg-slate-950 p-4 text-left font-mono text-[12px] leading-5 text-slate-100 shadow-inner dark:border-slate-700" dir="ltr">{QUESTION_IMPORT_EXAMPLE}</pre>
+                        </div>
+                          </div>
+
+                          <div className="space-y-4">
+                        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-500/25 dark:bg-emerald-500/10">
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="min-w-0">
+                              <p className="text-sm font-bold text-emerald-900 dark:text-emerald-200">برومبت جاهز للنسخ</p>
+                              <p className="text-xs text-emerald-700 dark:text-emerald-300">انسخه للذكاء الاصطناعي، ثم الصق النص الناتج في مربع الاستيراد بالأسفل.</p>
                             </div>
                             <button
                               type="button"
                               onClick={() => navigator.clipboard?.writeText(CSV_FORMAT_PROMPT)}
-                              className="inline-flex flex-shrink-0 items-center rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-emerald-700"
+                              className="inline-flex flex-shrink-0 items-center justify-center rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-emerald-700"
                             >
                               <Copy className="mr-1.5 h-3.5 w-3.5" />
                               نسخ
                             </button>
                           </div>
-                          <textarea
-                            readOnly
-                            value={CSV_FORMAT_PROMPT}
-                            className="h-44 w-full resize-y overflow-auto rounded-lg border border-emerald-100 bg-white p-3 text-xs leading-5 text-emerald-950 outline-none"
-                            dir="auto"
-                          />
+                          <details className="mt-3">
+                            <summary className="cursor-pointer text-xs font-bold text-emerald-800 dark:text-emerald-200">عرض البرومبت كامل</summary>
+                            <pre className="mt-3 max-h-36 overflow-auto whitespace-pre-wrap rounded-lg border border-emerald-200 bg-white p-3 text-xs leading-5 text-emerald-950 dark:border-emerald-500/20 dark:bg-slate-950 dark:text-emerald-100" dir="auto">{CSV_FORMAT_PROMPT}</pre>
+                          </details>
                         </div>
 
-                        <textarea
-                          value={csvText}
-                          onChange={(e) => setCsvText(e.target.value)}
-                          placeholder="Question, Option1, Option2, Option3, Option4, Correct..."
-                          className="h-64 w-full resize-y overflow-auto rounded-2xl border border-gray-200 bg-gray-50 p-4 font-mono text-sm outline-none transition-all focus:ring-2 focus:ring-amber-500"
-                        />
+                        <div className="space-y-2">
+                          <label className="block text-sm font-bold text-slate-900 dark:text-white">الصق الأسئلة هنا</label>
+                          <div className={`rounded-lg border px-3 py-2 text-sm font-medium ${
+                            csvText.trim() && detectedImportQuestionCount === 0
+                              ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+                              : 'border-slate-200 bg-white text-slate-600 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300'
+                          }`}>
+                            {csvText.trim()
+                              ? `تم اكتشاف ${detectedImportQuestionCount} سؤال قابل للاستيراد.`
+                              : 'الصق النص وسيظهر هنا عدد الأسئلة المكتشفة قبل الاستيراد.'}
+                          </div>
+                          <textarea
+                            value={csvText}
+                            onChange={(e) => {
+                              setCsvText(e.target.value);
+                              if (importError) setImportError('');
+                            }}
+                            placeholder={`Question 1: Your question here
+1. First answer
+2. Second answer
+3. Third answer
+4. Fourth answer
+Correct: 2`}
+                            className="min-h-72 w-full resize-y overflow-auto rounded-xl border border-slate-300 bg-white p-4 font-mono text-sm leading-6 text-slate-950 outline-none transition-all placeholder:text-slate-400 focus:border-amber-400 focus:ring-4 focus:ring-amber-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500 dark:focus:ring-amber-500/20"
+                            dir="auto"
+                          />
+                          {importError && (
+                            <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
+                              {importError}
+                            </p>
+                          )}
+                        </div>
+                        </div>
+                      </div>
                       </div>
 
-                      <div className="flex gap-4">
+                      <div className="flex flex-col-reverse gap-3 border-t border-slate-200 bg-white px-5 py-4 dark:border-slate-800 dark:bg-slate-950 sm:flex-row sm:px-6">
                         <button
-                          onClick={() => setShowCsvImport(false)}
-                          className="flex-1 py-3 bg-gray-100 text-gray-700 rounded-xl font-bold hover:bg-gray-200 transition-all"
+                          onClick={() => {
+                            setShowCsvImport(false);
+                            setImportError('');
+                          }}
+                          className="flex-1 rounded-xl border border-slate-200 bg-white py-3 font-bold text-slate-700 transition-all hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
                         >
                           إلغاء
                         </button>
                         <button
                           onClick={handleCsvImport}
                           disabled={!csvText.trim()}
-                          className="flex-1 py-3 bg-amber-600 text-white rounded-xl font-bold hover:bg-amber-700 transition-all shadow-lg shadow-amber-200 disabled:opacity-50"
+                          className="flex-1 rounded-xl bg-amber-600 py-3 font-bold text-white shadow-sm transition-all hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                          استيراد الآن
+                          {detectedImportQuestionCount > 0 ? `استيراد ${detectedImportQuestionCount} سؤال` : 'استيراد الآن'}
                         </button>
                       </div>
                     </motion.div>
@@ -1826,31 +2039,54 @@ const QuizBuilder: React.FC = () => {
             )}
 
             {/* Questions List (Review) */}
-            {questions.length > 0 && (
-              <div className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-2xl font-bold text-gray-900">Questions ({questions.length})</h2>
-                  <button
-                    onClick={handleAddQuestion}
-                    className="inline-flex items-center px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors shadow-sm"
-                  >
-                    <Plus className="w-4 h-4 mr-2" />
-                    Add Question
-                  </button>
-                </div>
-                <div className="space-y-6">
-                  {questions.map((q, index) => (
-                    <QuestionEditor
-                      key={index}
-                      question={q}
-                      index={index}
-                      onUpdate={(updated) => handleUpdateQuestion(index, updated)}
-                      onRemove={() => handleRemoveQuestion(index)}
-                    />
-                  ))}
-                </div>
+            <div className="min-h-[420px]">
+              {questions.length > 0 && (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-2xl font-bold text-gray-900">Questions ({questions.length})</h2>
+              <button
+                onClick={handleAddQuestion}
+                className="inline-flex items-center px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors shadow-sm"
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                Add Question
+              </button>
+            </div>
+            <div className="space-y-6">
+              {questions.map((q, index) => (
+                <QuestionEditor
+                  key={index}
+                  question={q}
+                  index={index}
+                  onUpdate={(updated) => handleUpdateQuestion(index, updated)}
+                  onRemove={() => handleRemoveQuestion(index)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {questions.length === 0 && isGenerating && (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-2xl font-bold text-gray-900">Questions</h2>
+              <div className="w-[150px] h-10">
+                <CardSkeleton count={1} />
               </div>
-            )}
+            </div>
+            <div className="space-y-6">
+              <CardSkeleton count={Math.max(3, Math.min(numQuestions || 5, 6))} />
+            </div>
+          </div>
+        )}
+
+        {questions.length === 0 && !isGenerating && (
+          <div className="text-center py-12 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">
+            <FileText className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+            <p className="text-gray-500">Start adding questions manually to build your quiz.</p>
+          </div>
+        )}
+      </div>
           </motion.div>
         )}
       </AnimatePresence>

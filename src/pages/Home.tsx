@@ -215,30 +215,31 @@ const Home: React.FC = () => {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-5 lg:gap-6">
           {steps.map((step, index) => (
             <motion.div
               key={step.number}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5, delay: 0.15 * (index + 1) }}
-              className="relative text-center space-y-4 p-8 bg-white dark:bg-slate-800 rounded-3xl border border-gray-100 dark:border-slate-700 shadow-sm hover:shadow-md transition-shadow"
+              className="group relative overflow-hidden rounded-xl border border-gray-200 bg-white p-7 text-center shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-indigo-200 hover:shadow-xl hover:shadow-indigo-100/50 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-indigo-700 dark:hover:shadow-black/20"
             >
               {index < steps.length - 1 && (
-                <div className="hidden md:block absolute top-10 -right-4 z-10">
-                  <ArrowRight className="w-6 h-6 text-indigo-200 dark:text-indigo-800" />
+                <div className="pointer-events-none absolute left-[calc(100%-0.75rem)] top-12 z-10 hidden w-8 items-center md:flex">
+                  <div className="h-px flex-1 bg-indigo-200 dark:bg-indigo-800" />
+                  <ArrowRight className="h-4 w-4 text-indigo-300 dark:text-indigo-700" />
                 </div>
               )}
-              <div className="relative inline-flex mx-auto">
-                <div className="w-20 h-20 bg-gradient-to-br from-indigo-600 to-purple-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-200/50 dark:shadow-indigo-900/30">
-                  <step.icon className="w-9 h-9 text-white" />
-                </div>
-                <span className="absolute -top-2 -right-2 w-7 h-7 bg-purple-500 text-white text-xs font-black rounded-full flex items-center justify-center shadow-md">
-                  {step.number}
-                </span>
+              <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 ring-1 ring-indigo-100 transition-colors group-hover:bg-indigo-600 group-hover:text-white dark:bg-indigo-950/40 dark:text-indigo-300 dark:ring-indigo-900/60 dark:group-hover:bg-indigo-600">
+                <step.icon className="h-9 w-9" />
               </div>
-              <h3 className="text-xl font-bold text-gray-900 dark:text-white">{step.title}</h3>
-              <p className="text-gray-500 dark:text-slate-400 leading-relaxed text-sm max-w-xs mx-auto">{step.description}</p>
+              <div className="mt-5 space-y-3">
+                <div className="mx-auto flex h-7 w-7 items-center justify-center rounded-full bg-purple-600 text-xs font-black text-white shadow-md shadow-purple-200 dark:shadow-none">
+                  {step.number}
+                </div>
+                <h3 className="text-xl font-extrabold text-gray-900 dark:text-white">{step.title}</h3>
+                <p className="mx-auto max-w-sm text-sm leading-7 text-gray-500 dark:text-slate-400">{step.description}</p>
+              </div>
             </motion.div>
           ))}
         </div>

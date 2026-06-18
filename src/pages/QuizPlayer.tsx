@@ -55,6 +55,7 @@ interface SavedQuizProgress {
   currentQuestionIndex: number;
   userAnswers: string[];
   markedQuestions: number[];
+  optionOrders?: number[][];
   timeLeft: number;
   questionCount: number;
   updatedAt: number;
@@ -78,6 +79,37 @@ const normalizeQuestionOptions = (question: Question) => {
     return optionLetters.map(letter => String((source as Record<string, string>)[letter] || '')).filter(Boolean);
   }
   return [];
+};
+
+const shuffleNumbers = (length: number) => {
+  const values = Array.from({ length }, (_, index) => index);
+  for (let index = values.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [values[index], values[swapIndex]] = [values[swapIndex], values[index]];
+  }
+  return values;
+};
+
+const createOptionOrders = (questions: Question[]) =>
+  questions.map(question => shuffleNumbers(normalizeQuestionOptions(question).length));
+
+const normalizeSavedOptionOrders = (questions: Question[], optionOrders?: number[][]) => {
+  if (!Array.isArray(optionOrders)) return null;
+
+  return questions.map((question, questionIndex) => {
+    const optionCount = normalizeQuestionOptions(question).length;
+    const savedOrder = optionOrders[questionIndex];
+    if (!Array.isArray(savedOrder) || savedOrder.length !== optionCount) {
+      return shuffleNumbers(optionCount);
+    }
+
+    const uniqueIndexes = new Set(savedOrder);
+    const isValid = uniqueIndexes.size === optionCount && savedOrder.every(index =>
+      Number.isInteger(index) && index >= 0 && index < optionCount
+    );
+
+    return isValid ? savedOrder : shuffleNumbers(optionCount);
+  });
 };
 
 const getQuestionType = (question: Question): NonNullable<Question['type']> =>
@@ -176,6 +208,7 @@ const loadSavedProgress = (key: string, questionCount: number): SavedQuizProgres
       markedQuestions: Array.isArray(parsed.markedQuestions)
         ? parsed.markedQuestions.filter(index => Number.isInteger(index) && index >= 0 && index < questionCount)
         : [],
+      optionOrders: Array.isArray(parsed.optionOrders) ? parsed.optionOrders : undefined,
       timeLeft: Math.max(0, Number(parsed.timeLeft) || 0),
       questionCount,
       updatedAt: Number(parsed.updatedAt) || Date.now(),
@@ -220,6 +253,12 @@ const clearSavedProgress = (key: string) => {
   window.dispatchEvent(new Event(QUIZ_PROGRESS_EVENT));
 };
 
+const isTypingTarget = (target: EventTarget | null) => {
+  if (!(target instanceof HTMLElement)) return false;
+  const tagName = target.tagName.toLowerCase();
+  return tagName === 'input' || tagName === 'textarea' || tagName === 'select' || target.isContentEditable;
+};
+
 interface QuizPlayerProps {
   publicMode?: boolean;
   reviewMode?: boolean;
@@ -245,6 +284,7 @@ const QuizPlayer: React.FC<QuizPlayerProps> = ({ publicMode = false, reviewMode 
   const [revealedFeedback, setRevealedFeedback] = useState<Set<number>>(new Set());
   const [previousMistakeKeys, setPreviousMistakeKeys] = useState<Set<string>>(new Set());
   const [progressReady, setProgressReady] = useState(false);
+  const [optionOrders, setOptionOrders] = useState<number[][]>([]);
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const progressKey = getProgressKey({ userId: user?.uid, quizId, shareId, resultId, publicMode, reviewMode });
@@ -254,6 +294,7 @@ const QuizPlayer: React.FC<QuizPlayerProps> = ({ publicMode = false, reviewMode 
     const savedProgress = loadSavedProgress(progressKey, questions.length);
     setPreviousMistakeKeys(loadSavedMistakes(mistakesKey, questions.length));
     setUserAnswers(savedProgress?.userAnswers || new Array(questions.length).fill(''));
+    setOptionOrders(normalizeSavedOptionOrders(questions, savedProgress?.optionOrders) || createOptionOrders(questions));
     setCurrentQuestionIndex(savedProgress?.currentQuestionIndex || 0);
     setMarkedQuestions(new Set(savedProgress?.markedQuestions || []));
     setTimeLeft(savedProgress && savedProgress.timeLeft > 0 ? savedProgress.timeLeft : defaultTimeLeft);
@@ -267,6 +308,7 @@ const QuizPlayer: React.FC<QuizPlayerProps> = ({ publicMode = false, reviewMode 
         currentQuestionIndex,
         userAnswers: Array.from({ length: quiz.questions.length }, (_, index) => userAnswers[index] || ''),
         markedQuestions: Array.from(markedQuestions),
+        optionOrders,
         timeLeft,
         questionCount: quiz.questions.length,
         updatedAt: Date.now(),
@@ -282,25 +324,28 @@ const QuizPlayer: React.FC<QuizPlayerProps> = ({ publicMode = false, reviewMode 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (isFinished) return;
-      
-      if (e.key === 'ArrowRight') {
+
+      const key = e.key.toLowerCase();
+      const code = e.code;
+      const isTyping = isTypingTarget(e.target);
+
+      if (isTyping) return;
+
+      if (e.key === 'ArrowRight' || key === 'd' || code === 'KeyD') {
+        e.preventDefault();
         if (currentQuestionIndex < (quiz?.questions.length || 0) - 1) {
           setCurrentQuestionIndex(prev => prev + 1);
         }
-      } else if (e.key === 'ArrowLeft') {
+      } else if (e.key === 'ArrowLeft' || key === 'a' || code === 'KeyA') {
+        e.preventDefault();
         if (currentQuestionIndex > 0) {
           setCurrentQuestionIndex(prev => prev - 1);
         }
       } else if (e.key === ' ') {
-        // Only toggle pause if not typing in an input
-        if (document.activeElement?.tagName !== 'INPUT') {
-          e.preventDefault();
-          setIsTimerPaused(prev => !prev);
-        }
-      } else if (e.key.toLowerCase() === 'm') {
-        if (document.activeElement?.tagName !== 'INPUT') {
-          toggleMarkQuestion(currentQuestionIndex);
-        }
+        e.preventDefault();
+        setIsTimerPaused(prev => !prev);
+      } else if (key === 'm') {
+        toggleMarkQuestion(currentQuestionIndex);
       }
     };
 
@@ -365,6 +410,7 @@ const QuizPlayer: React.FC<QuizPlayerProps> = ({ publicMode = false, reviewMode 
 
           setQuiz(reviewQuiz);
           setUserAnswers(new Array(wrongQuestions.length).fill(''));
+          setOptionOrders(createOptionOrders(wrongQuestions));
           setPreviousMistakeKeys(new Set());
           setTimeLeft(0);
           setProgressReady(true);
@@ -430,7 +476,7 @@ const QuizPlayer: React.FC<QuizPlayerProps> = ({ publicMode = false, reviewMode 
   useEffect(() => {
     if (!progressReady || !quiz || isFinished || reviewMode) return;
     saveProgressNow();
-  }, [progressReady, quiz, currentQuestionIndex, userAnswers, markedQuestions, timeLeft, isFinished, reviewMode]);
+  }, [progressReady, quiz, currentQuestionIndex, userAnswers, markedQuestions, optionOrders, timeLeft, isFinished, reviewMode]);
 
   const handleAnswer = (answer: string) => {
     if (quiz?.feedbackMode === 'per-question' && revealedFeedback.has(currentQuestionIndex)) return;
@@ -549,6 +595,7 @@ const QuizPlayer: React.FC<QuizPlayerProps> = ({ publicMode = false, reviewMode 
     setIsFinished(false);
     setCurrentQuestionIndex(0);
     setUserAnswers(new Array(quiz.questions.length).fill(''));
+    setOptionOrders(createOptionOrders(quiz.questions));
     setMarkedQuestions(new Set());
     setRevealedFeedback(new Set());
     setTimeLeft((quiz.timer || 0) * 60);
@@ -637,7 +684,11 @@ const QuizPlayer: React.FC<QuizPlayerProps> = ({ publicMode = false, reviewMode 
   }
   
   const progress = ((currentQuestionIndex + 1) / quiz.questions.length) * 100;
-  const currentOptions = normalizeQuestionOptions(currentQuestion);
+  const rawCurrentOptions = normalizeQuestionOptions(currentQuestion);
+  const currentOptionOrder = optionOrders[currentQuestionIndex];
+  const currentOptions = Array.isArray(currentOptionOrder) && currentOptionOrder.length === rawCurrentOptions.length
+    ? currentOptionOrder.map(index => rawCurrentOptions[index]).filter(Boolean)
+    : rawCurrentOptions;
   const currentExplanation = getQuestionExplanation(currentQuestion);
   const currentTopic = String(currentQuestion?.topic_tag || '').trim();
   const currentDifficultyBadge = getDifficultyBadge(currentQuestion?.difficulty);
@@ -710,7 +761,7 @@ const QuizPlayer: React.FC<QuizPlayerProps> = ({ publicMode = false, reviewMode 
             {previousMistakeKeys.has(getQuestionMistakeKey(question)) && (
               <div
                 className="absolute -bottom-1 -left-1 w-3 h-3 rounded-full border-2 border-white bg-red-500 shadow-sm"
-                title="Ø£Ø®Ø·Ø£Øª ÙÙŠ Ù‡Ø°Ø§ Ø§Ù„Ø³Ø¤Ø§Ù„ ÙÙŠ Ø¢Ø®Ø± Ù…Ø­Ø§ÙˆÙ„Ø©"
+                title={t('quiz.previousMistake')}
               />
             )}
           </button>
@@ -733,8 +784,8 @@ const QuizPlayer: React.FC<QuizPlayerProps> = ({ publicMode = false, reviewMode 
                   {currentType.replace('-', ' ')}
                 </span>
                 {currentWasPreviouslyWrong && (
-                  <span className="inline-flex items-center rounded-full border border-red-100 bg-red-50 px-3 py-1 text-[10px] font-bold text-red-600 sm:text-xs">
-                    Ø£Ø®Ø·Ø£Øª ÙÙŠÙ‡ Ø³Ø§Ø¨Ù‚Ø§Ù‹
+                  <span className="inline-flex items-center rounded-full border border-red-100 bg-red-50 px-3 py-1 text-[10px] font-bold text-red-600 sm:text-xs" dir="auto">
+                    {t('quiz.previousMistakeShort')}
                   </span>
                 )}
                 {currentDifficultyBadge && (

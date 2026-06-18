@@ -61,8 +61,8 @@
   "26f6d0a5-b650-46b6-a3f4-cceabb21baae": {
     "sessionId": "26f6d0a5-b650-46b6-a3f4-cceabb21baae",
     "firstVisit": 1778492908849,
-    "lastVisit": 1779836665091,
-    "visitCount": 213,
+    "lastVisit": 1780811621507,
+    "visitCount": 322,
     "isRegistered": true,
     "uid": "gsU8IdYVsxgHdwdbsmDVh1ClzO92"
   },
@@ -93,6 +93,13 @@
     "firstVisit": 1779836627554,
     "lastVisit": 1779836627565,
     "visitCount": 2,
+    "isRegistered": false
+  },
+  "smoke-1780636900596": {
+    "sessionId": "smoke-1780636900596",
+    "firstVisit": 1780636900774,
+    "lastVisit": 1780636900774,
+    "visitCount": 1,
     "isRegistered": false
   }
 }

@@ -23,6 +23,35 @@ export interface PdfQuizData {
 }
 
 const BRAND_NAME = 'AI Quiz Master';
+let html2pdfImportPromise: Promise<any> | null = null;
+
+const loadHtml2Pdf = async () => {
+  if (!html2pdfImportPromise) {
+    html2pdfImportPromise = import('html2pdf.js')
+      .then((module) => (module as any).default || module)
+      .catch((error) => {
+        html2pdfImportPromise = null;
+        throw error;
+      });
+  }
+
+  return html2pdfImportPromise;
+};
+
+export const preloadQuizPdfExporter = () => {
+  if (typeof window === 'undefined') return;
+
+  const idleCallback = (window as any).requestIdleCallback as
+    | ((callback: () => void, options?: { timeout?: number }) => number)
+    | undefined;
+
+  if (idleCallback) {
+    idleCallback(() => { void loadHtml2Pdf(); }, { timeout: 2500 });
+    return;
+  }
+
+  window.setTimeout(() => { void loadHtml2Pdf(); }, 700);
+};
 
 const escapeHtml = (value: unknown) =>
   String(value ?? '')
@@ -262,6 +291,22 @@ const buildAnswerKeyHtml = (questions: PdfQuizQuestion[]) => {
     `;
   }).join('');
 };
+
+const getPdfCanvasScale = (questionCount: number) => {
+  const deviceScale = window.devicePixelRatio || 1;
+  const baseScale = deviceScale > 1.5 ? 2 : 1.7;
+
+  if (questionCount >= 80) return 1.35;
+  if (questionCount >= 45) return 1.5;
+  if (questionCount >= 25) return Math.min(1.7, baseScale);
+
+  return Math.min(2, baseScale);
+};
+
+const waitForNextPaint = () =>
+  new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
 
 export const buildQuizPdfHtml = (quiz: PdfQuizData) => {
   const questions = Array.isArray(quiz.questions) ? quiz.questions : [];
@@ -512,10 +557,10 @@ export const buildQuizPdfHtml = (quiz: PdfQuizData) => {
         <div class="brand-mark">AQ</div>
         <div>
           <h2 class="brand-title">${BRAND_NAME}</h2>
-          <p class="brand-subtitle">Unified smart quiz template</p>
+          <p class="brand-subtitle">نموذج كويز جاهز للطباعة</p>
         </div>
       </div>
-      <div class="doc-label">Exam PDF</div>
+      <div class="doc-label">ملف اختبار</div>
     </header>
 
     <section>
@@ -581,22 +626,22 @@ export const exportQuizToPdf = async (quiz: PdfQuizData) => {
   if (!renderTarget?.element) return false;
 
   try {
-    const html2pdfModule = await import('html2pdf.js');
-    const html2pdf = (html2pdfModule as any).default || html2pdfModule;
+    await waitForNextPaint();
+    const html2pdf = await loadHtml2Pdf();
     const title = quiz.title?.trim() || 'quiz';
+    const questionCount = Array.isArray(quiz.questions) ? quiz.questions.length : 0;
 
     await html2pdf()
       .set({
         filename: `${sanitizeFileName(title)}.pdf`,
         margin: 0,
-        image: { type: 'png', quality: 1 },
+        image: { type: 'jpeg', quality: 0.92 },
         html2canvas: {
-          scale: Math.max(3, Math.min(4, (window.devicePixelRatio || 1) * 2)),
+          scale: getPdfCanvasScale(questionCount),
           useCORS: true,
           backgroundColor: '#ffffff',
           scrollX: 0,
           scrollY: 0,
-          letterRendering: true,
         },
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait', compress: true },
         pagebreak: { mode: ['css', 'legacy'], avoid: ['.question-card', '.answer-row'] },

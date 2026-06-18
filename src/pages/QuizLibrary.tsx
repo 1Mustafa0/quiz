@@ -2,12 +2,11 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { collection, query, where, onSnapshot, deleteDoc, doc, orderBy, setDoc, Timestamp } from 'firebase/firestore';
-import { Play, Trash2, Clock, BookOpen, BarChart, Search, Filter, Plus, Pencil, Share2, CheckCircle2, Download, Loader2 } from 'lucide-react';
+import { collection, query, where, onSnapshot, deleteDoc, doc, orderBy, setDoc, Timestamp, writeBatch } from 'firebase/firestore';
+import { Play, Trash2, Clock, BookOpen, BarChart, Search, Filter, Plus, Pencil, Share2, CheckCircle2, Download, Loader2, MoreVertical } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import ConfirmModal from '../components/ConfirmModal';
 import { ownerOnlyError } from '../utils/owner';
-import { exportQuizToPdf, getPdfQuestionAnswer, getPdfQuestionOptions } from '../utils/quizPdf';
+import { exportQuizToPdf, getPdfQuestionAnswer, getPdfQuestionOptions, preloadQuizPdfExporter } from '../utils/quizPdf';
 import { getCategoryTone, normalizeCategory, sortCategories } from '../utils/categories';
 
 interface Quiz {
@@ -31,10 +30,17 @@ const QuizLibrary: React.FC = () => {
   const [filterDifficulty, setFilterDifficulty] = useState('All');
   const [sharingQuizId, setSharingQuizId] = useState<string | null>(null);
   const [exportingQuizId, setExportingQuizId] = useState<string | null>(null);
+  const [deletingQuizId, setDeletingQuizId] = useState<string | null>(null);
+  const [bulkDeleting, setBulkDeleting] = useState<'all' | 'category' | null>(null);
+  const [selectedQuizIds, setSelectedQuizIds] = useState<Set<string>>(() => new Set());
   const [shareMessage, setShareMessage] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(0);
   const [totalQuizzes, setTotalQuizzes] = useState(0);
   const itemsPerPage = 12;
+
+  useEffect(() => {
+    preloadQuizPdfExporter();
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -74,15 +80,120 @@ const QuizLibrary: React.FC = () => {
     };
   }, [user]);
 
-  const [quizToDelete, setQuizToDelete] = useState<string | null>(null);
+  useEffect(() => {
+    const quizIds = new Set(quizzes.map((quiz) => quiz.id));
+    setSelectedQuizIds((prev) => {
+      const next = new Set([...prev].filter((id) => quizIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [quizzes]);
 
-  const handleDelete = async () => {
-    if (!quizToDelete) return;
+  const toggleQuizSelection = (quizId: string) => {
+    setSelectedQuizIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(quizId)) next.delete(quizId);
+      else next.add(quizId);
+      return next;
+    });
+  };
+
+  const handleDelete = async (quiz: Quiz) => {
+    const quizTitle = quiz.title?.trim() || 'هذا الاختبار';
+    const confirmed = window.confirm(`هل أنت متأكد من حذف "${quizTitle}"؟\nلا يمكن التراجع عن هذا الإجراء.`);
+    if (!confirmed) return;
+
+    setDeletingQuizId(quiz.id);
     try {
-      await deleteDoc(doc(db, 'quizzes', quizToDelete));
-      setQuizToDelete(null);
+      await deleteDoc(doc(db, 'quizzes', quiz.id));
+      setSelectedQuizIds((prev) => {
+        const next = new Set(prev);
+        next.delete(quiz.id);
+        return next;
+      });
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `quizzes/${quizToDelete}`);
+      handleFirestoreError(error, OperationType.DELETE, `quizzes/${quiz.id}`);
+    } finally {
+      setDeletingQuizId(null);
+    }
+  };
+
+  const deleteQuizBatch = async (items: Quiz[]) => {
+    for (let i = 0; i < items.length; i += 450) {
+      const batch = writeBatch(db);
+      items.slice(i, i + 450).forEach((quiz) => {
+        batch.delete(doc(db, 'quizzes', quiz.id));
+      });
+      await batch.commit();
+    }
+  };
+
+  const handleDeleteByCategory = async () => {
+    if (selectedQuizIds.size < 2) {
+      window.alert('حدد اختبارين أو أكثر أولا.');
+      return;
+    }
+
+    if (filterCategory === 'All') {
+      window.alert('اختر تاجا من قائمة التصنيفات أولا.');
+      return;
+    }
+
+    const quizzesToDelete = quizzes.filter((quiz) => selectedQuizIds.has(quiz.id) && normalizeCategory(quiz.category) === filterCategory);
+    if (quizzesToDelete.length === 0) {
+      window.alert('لا توجد اختبارات محددة بهذا التاج.');
+      return;
+    }
+
+    if (quizzesToDelete.length < 2) {
+      window.alert('حدد اختبارين أو أكثر من نفس التاج أولا.');
+      return;
+    }
+
+    const confirmed = window.confirm(`هل تريد حذف ${quizzesToDelete.length} اختبار محدد من تاج "${filterCategory}"؟\nلا يمكن التراجع عن هذا الإجراء.`);
+    if (!confirmed) return;
+
+    setBulkDeleting('category');
+    try {
+      await deleteQuizBatch(quizzesToDelete);
+      const deletedIds = new Set(quizzesToDelete.map((quiz) => quiz.id));
+      setQuizzes((prev) => prev.filter((quiz) => !deletedIds.has(quiz.id)));
+      setSelectedQuizIds((prev) => {
+        const next = new Set(prev);
+        deletedIds.forEach((id) => next.delete(id));
+        return next;
+      });
+      setFilterCategory('All');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `quizzes/category/${filterCategory}`);
+    } finally {
+      setBulkDeleting(null);
+    }
+  };
+
+  const handleDeleteAll = async () => {
+    if (selectedQuizIds.size < 2) {
+      window.alert('حدد اختبارين أو أكثر أولا.');
+      return;
+    }
+
+    const quizzesToDelete = quizzes.filter((quiz) => selectedQuizIds.has(quiz.id));
+    const confirmed = window.confirm(`هل تريد حذف كل الاختبارات المحددة؟ العدد: ${quizzesToDelete.length}\nلا يمكن التراجع عن هذا الإجراء.`);
+    if (!confirmed) return;
+
+    setBulkDeleting('all');
+    try {
+      await deleteQuizBatch(quizzesToDelete);
+      const deletedIds = new Set(quizzesToDelete.map((quiz) => quiz.id));
+      setQuizzes((prev) => prev.filter((quiz) => !deletedIds.has(quiz.id)));
+      setSelectedQuizIds((prev) => {
+        const next = new Set(prev);
+        deletedIds.forEach((id) => next.delete(id));
+        return next;
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'quizzes/all');
+    } finally {
+      setBulkDeleting(null);
     }
   };
 
@@ -175,6 +286,12 @@ const QuizLibrary: React.FC = () => {
     const matchesDifficulty = filterDifficulty === 'All' || q.difficulty === filterDifficulty;
     return matchesSearch && matchesCategory && matchesDifficulty;
   });
+  const selectedCount = selectedQuizIds.size;
+  const selectedInCategoryCount = filterCategory === 'All'
+    ? 0
+    : quizzes.filter((quiz) => selectedQuizIds.has(quiz.id) && normalizeCategory(quiz.category) === filterCategory).length;
+  const canBulkDelete = selectedCount >= 2 && bulkDeleting === null;
+  const canDeleteByCategory = canBulkDelete && filterCategory !== 'All' && selectedInCategoryCount >= 2;
 
   if (loading) {
     return (
@@ -222,7 +339,7 @@ const QuizLibrary: React.FC = () => {
       </AnimatePresence>
 
       {/* Filters */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-white dark:bg-slate-800 p-6 rounded-2xl border border-gray-100 dark:border-slate-700 shadow-sm">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 bg-white dark:bg-slate-800 p-6 rounded-2xl border border-gray-100 dark:border-slate-700 shadow-sm">
         <div className="space-y-2">
           <label className="text-sm font-medium text-gray-700 dark:text-slate-300">Search</label>
           <div className="relative">
@@ -266,6 +383,47 @@ const QuizLibrary: React.FC = () => {
             </select>
           </div>
         </div>
+        {quizzes.length > 0 && (
+          <div className="space-y-2" dir="rtl" style={{ direction: 'rtl' }}>
+            <label className="text-sm font-medium text-gray-700 dark:text-slate-300">إجراءات</label>
+            <div className="relative flex items-center justify-between rounded-lg border border-gray-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900">
+              <span className="text-sm text-gray-600 dark:text-slate-300">المحدد: {selectedCount}</span>
+              <details className="relative">
+                <summary
+                  className="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100 [&::-webkit-details-marker]:hidden"
+                  title="إجراءات المحدد"
+                >
+                  <MoreVertical className="h-4 w-4" />
+                </summary>
+                <div className="absolute left-0 top-10 z-30 w-48 overflow-hidden rounded-xl border border-gray-200 bg-white py-1 text-right shadow-xl dark:border-slate-700 dark:bg-slate-900">
+                  <button
+                    type="button"
+                    onClick={handleDeleteByCategory}
+                    disabled={!canDeleteByCategory}
+                    className="flex w-full items-center justify-between gap-3 px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 dark:text-slate-200 dark:hover:bg-slate-800 dark:hover:text-red-300"
+                  >
+                    <span>حذف من التاج</span>
+                    {bulkDeleting === 'category' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDeleteAll}
+                    disabled={!canBulkDelete}
+                    className="flex w-full items-center justify-between gap-3 px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 dark:text-slate-200 dark:hover:bg-slate-800 dark:hover:text-red-300"
+                  >
+                    <span>حذف المحدد</span>
+                    {bulkDeleting === 'all' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                  </button>
+                  {selectedCount < 2 && (
+                    <div className="border-t border-gray-100 px-3 py-2 text-xs text-gray-400 dark:border-slate-800 dark:text-slate-500">
+                      حدد اختبارين أو أكثر لتفعيل الحذف.
+                    </div>
+                  )}
+                </div>
+              </details>
+              </div>
+          </div>
+        )}
       </div>
 
       {/* Quiz Grid */}
@@ -280,6 +438,7 @@ const QuizLibrary: React.FC = () => {
           <AnimatePresence>
             {filteredQuizzes.map((quiz) => {
               const quizCategory = normalizeCategory(quiz.category);
+              const isSelected = selectedQuizIds.has(quiz.id);
 
               return (
                 <motion.div
@@ -288,7 +447,7 @@ const QuizLibrary: React.FC = () => {
                   initial={{ opacity: 0, scale: 0.9 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.9 }}
-                  className="bg-white rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-all overflow-hidden flex flex-col group"
+                  className={`bg-white rounded-2xl border shadow-sm hover:shadow-md transition-all overflow-visible flex flex-col group ${isSelected ? 'border-indigo-300 ring-2 ring-indigo-100 dark:border-indigo-500/60 dark:ring-indigo-500/20' : 'border-gray-100 dark:border-slate-700'}`}
                 >
                 <div className="p-6 flex-grow space-y-4">
                   <div className="flex items-start justify-between">
@@ -301,20 +460,43 @@ const QuizLibrary: React.FC = () => {
                       <h3 className="text-xl font-semibold text-gray-900 dark:text-white line-clamp-1">{quiz.title}</h3>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
-                      <Link
-                        to={`/edit/${quiz.id}`}
-                        className="inline-flex items-center justify-center p-2 text-gray-500 hover:text-indigo-600 transition-colors bg-white dark:bg-slate-900 rounded-lg border border-gray-100 dark:border-slate-700"
-                        title="Edit quiz"
+                      <label
+                        className="inline-flex items-center justify-center p-2 text-gray-500 transition-colors bg-white dark:bg-slate-900 rounded-lg border border-gray-100 dark:border-slate-700 hover:text-indigo-600 cursor-pointer"
+                        title="Select quiz"
                       >
-                        <Pencil className="w-4 h-4" />
-                      </Link>
-                      <button
-                        onClick={() => setQuizToDelete(quiz.id)}
-                        className="inline-flex items-center justify-center p-2 text-gray-500 hover:text-red-500 transition-colors bg-white dark:bg-slate-900 rounded-lg border border-gray-100 dark:border-slate-700"
-                        title="Delete quiz"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleQuizSelection(quiz.id)}
+                          className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                      </label>
+                      <details className="relative">
+                        <summary
+                          className="inline-flex cursor-pointer list-none items-center justify-center rounded-lg border border-gray-100 bg-white p-2 text-gray-500 transition-colors hover:text-gray-900 dark:border-slate-700 dark:bg-slate-900 dark:hover:text-slate-100 [&::-webkit-details-marker]:hidden"
+                          title="Quiz actions"
+                        >
+                          <MoreVertical className="h-4 w-4" />
+                        </summary>
+                        <div className="absolute right-0 top-10 z-30 w-40 overflow-hidden rounded-xl border border-gray-200 bg-white py-1 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+                          <Link
+                            to={`/edit/${quiz.id}`}
+                            className="flex items-center gap-3 px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-50 hover:text-indigo-600 dark:text-slate-200 dark:hover:bg-slate-800 dark:hover:text-indigo-300"
+                          >
+                            <Pencil className="h-4 w-4" />
+                            Edit
+                          </Link>
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(quiz)}
+                            disabled={deletingQuizId === quiz.id || bulkDeleting !== null}
+                            className="flex w-full items-center gap-3 px-3 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50 dark:text-slate-200 dark:hover:bg-slate-800 dark:hover:text-red-300"
+                          >
+                            {deletingQuizId === quiz.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                            Delete
+                          </button>
+                        </div>
+                      </details>
                     </div>
                   </div>
                   
@@ -371,18 +553,6 @@ const QuizLibrary: React.FC = () => {
           </AnimatePresence>
         </div>
       )}
-
-      {/* Delete Confirmation Modal */}
-      <ConfirmModal
-        isOpen={!!quizToDelete}
-        onClose={() => setQuizToDelete(null)}
-        onConfirm={handleDelete}
-        title="حذف الكويز؟"
-        message="هل أنت متأكد من حذف هذا الكويز؟ لا يمكن التراجع عن هذا الإجراء."
-        confirmText="حذف"
-        cancelText="إلغاء"
-        type="danger"
-      />
     </div>
   );
 };
