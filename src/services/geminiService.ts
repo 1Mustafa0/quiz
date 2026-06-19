@@ -13,6 +13,7 @@ const MAX_TEXT_CHARS = Number(process.env.QUIZ_MAX_TEXT_CHARS || 50000);
 const MAX_QUESTIONS = Number(process.env.QUIZ_MAX_QUESTIONS || 30);
 const MIN_AUTO_QUESTIONS = 3;
 const GROQ_TIMEOUT_MS = Number(process.env.GROQ_TIMEOUT_MS || 30000);
+const GROQ_MAX_TOKENS = Number(process.env.GROQ_MAX_TOKENS || 9000);
 
 const isQuotaError = (err: any) => {
   const message = `${err?.message || ''} ${err?.status || ''} ${err?.code || ''}`;
@@ -73,10 +74,57 @@ function clampQuestionCount(numQuestions: number): number {
 export function recommendQuestionCount(characterLength: number): number {
   const length = Math.max(0, Math.floor(Number(characterLength) || 0));
   if (length < 1200) return 3;
-  if (length < 3000) return 5;
-  if (length < 6500) return 8;
-  if (length < 10000) return 12;
-  return Math.min(MAX_QUESTIONS, 15 + Math.floor((length - 10000) / 2500));
+  if (length < 2500) return 6;
+  if (length < 5000) return 10;
+  if (length < 9000) return 15;
+  if (length < 15000) return 20;
+  if (length < 25000) return 25;
+  return MAX_QUESTIONS;
+}
+
+function estimateKnowledgePointCount(text: string): number {
+  const cleanText = String(text || '').replace(/\r\n?/g, '\n').trim();
+  if (!cleanText) return 0;
+
+  const lines = cleanText
+    .split('\n')
+    .map(line => line.replace(/[ \t\f\v]+/g, ' ').trim())
+    .filter(Boolean);
+
+  const meaningfulLines = lines.filter(line => {
+    const words = line.match(/[\p{L}\p{N}%+/<>=-]+/gu) || [];
+    return words.length >= 3 && line.length >= 12;
+  });
+
+  const bulletOrNumberedLines = meaningfulLines.filter(line =>
+    /^[-+*â€¢â—â—‹â–ªâ–«]\s+/.test(line) ||
+    /^\d{1,3}\s*[\).:\-]\s+/.test(line) ||
+    /^[A-D]\s*[\).:\-]\s+/i.test(line)
+  ).length;
+
+  const headingLines = meaningfulLines.filter((line, index) =>
+    isLikelyLessonHeading(line, meaningfulLines[index + 1] || '')
+  ).length;
+
+  const factSentences = cleanText
+    .split(/[.!?ØŸ]\s+|\n+/)
+    .map(sentence => sentence.trim())
+    .filter(sentence => {
+      const words = sentence.match(/[\p{L}\p{N}%+/<>=-]+/gu) || [];
+      return words.length >= 6 && sentence.length >= 25;
+    }).length;
+
+  const denseFacts = meaningfulLines.filter(line =>
+    /(?:\d+\s*%|\d+\s*(?:ml|mg|kg|hr|hour|hours|day|days|week|weeks|cm|mm|l)\b|formula|classification|degree|rule|signs?|symptoms?|causes?|treatment|management|first aid|fluid|pain|infection|wound|burn|ØªØµÙ†ÙŠÙ|Ø¹Ù„Ø§Ø¬|Ø£Ø³Ø¨Ø§Ø¨|Ø£Ø¹Ø±Ø§Ø¶|Ø¯Ø±Ø¬Ø©|Ø¥Ø³Ø¹Ø§Ù)/i.test(line)
+  ).length;
+
+  const rawEstimate = Math.max(
+    recommendQuestionCount(cleanText.length),
+    headingLines + Math.ceil((bulletOrNumberedLines + denseFacts) * 0.75),
+    Math.ceil(factSentences * 0.55)
+  );
+
+  return Math.max(MIN_AUTO_QUESTIONS, Math.min(MAX_QUESTIONS, rawEstimate));
 }
 
 export function cleanQuizText(text: string): string {
@@ -419,8 +467,9 @@ export function validateAndNormalizeQuiz(value: any, expectedCount: number): Qui
 function buildQuizPrompt(params: QuizGenerationParams, cleanedContent: string, structuredContent: string): string {
   const { numQuestions, difficulty, notes } = params;
   const safeCount = clampQuestionCount(numQuestions);
+  const knowledgePointCount = estimateKnowledgePointCount(structuredContent || cleanedContent);
   const questionCountInstruction = safeCount === 0
-    ? `If numQuestions is auto, generate ${recommendQuestionCount(cleanedContent.length)} questions for this content length unless the content cannot support that many. Minimum ${MIN_AUTO_QUESTIONS}, maximum ${MAX_QUESTIONS}.`
+    ? `If numQuestions is auto, generate exactly ${knowledgePointCount} questions based on the number of distinct knowledge points in the source. Only reduce the count if the source truly cannot support that many distinct, grounded questions. Minimum ${MIN_AUTO_QUESTIONS}, maximum ${MAX_QUESTIONS}.`
     : `Generate exactly ${safeCount} questions.`;
   const notesInstruction = notes?.trim()
     ? `\nUser instructions:\n${notes.trim().slice(0, 1000)}\n`
@@ -431,6 +480,9 @@ function buildQuizPrompt(params: QuizGenerationParams, cleanedContent: string, s
 Understanding rules:
 - Carefully understand the content before generating questions.
 - First build an internal lesson map from the source: main lesson title, major headings, subheadings/branches, then explanations under each branch.
+- Identify every distinct knowledge point that can be tested: definitions, causes, classifications, degrees, percentages, formulas, treatment steps, first-aid steps, risks, complications, signs/symptoms, contraindications, and nursing actions.
+- In automatic mode, the question count is based on these knowledge points, not on a fixed default or only on text length.
+- Cover as many distinct knowledge points as possible, ideally one question per important knowledge point until the requested count is reached.
 - Treat slide titles and short topic lines as headings, and the lines after them as explanations or examples for that heading.
 - Use the lesson map to decide coverage: generate questions across the main headings and their branches, not from random isolated OCR lines.
 - Extract only meaningful and important information.
@@ -514,7 +566,7 @@ async function callGroqModel(prompt: string, model: string): Promise<string> {
       body: JSON.stringify({
         model,
         temperature: 0.15,
-        max_tokens: 2600,
+        max_tokens: GROQ_MAX_TOKENS,
         response_format: { type: 'json_object' },
         messages: [
           {
@@ -679,10 +731,15 @@ export const generateQuizFromContent = async (params: QuizGenerationParams): Pro
   }
 
   const structuredContent = structureLessonContent(cleanedContent);
+  const requestedCount = expectedCount > 0
+    ? expectedCount
+    : image && !cleanedContent
+      ? 5
+      : estimateKnowledgePointCount(structuredContent || cleanedContent);
   const prompt = buildQuizPrompt({
     content: cleanedContent,
     image,
-    numQuestions: expectedCount,
+    numQuestions: requestedCount,
     language,
     difficulty,
     notes,
@@ -692,7 +749,7 @@ export const generateQuizFromContent = async (params: QuizGenerationParams): Pro
 
   if (!image) {
     try {
-      const quiz = await generateWithGroq(prompt, expectedCount);
+      const quiz = await generateWithGroq(prompt, requestedCount);
       return { ...quiz, provider: 'groq', status: 'success', cleanedText: structuredContent || cleanedContent, attempts: ['groq_success'] };
     } catch (err: any) {
       attempts.push(`groq_failed: ${err?.message || err}`);
@@ -700,7 +757,7 @@ export const generateQuizFromContent = async (params: QuizGenerationParams): Pro
     }
 
     try {
-      const quiz = await generateWithGroq(prompt, expectedCount);
+      const quiz = await generateWithGroq(prompt, requestedCount);
       return { ...quiz, provider: 'groq', status: 'success', cleanedText: structuredContent || cleanedContent, attempts: [...attempts, 'groq_retry_success'] };
     } catch (err: any) {
       attempts.push(`groq_retry_failed: ${err?.message || err}`);
@@ -711,7 +768,7 @@ export const generateQuizFromContent = async (params: QuizGenerationParams): Pro
   }
 
   try {
-    const quiz = await generateWithGemini(prompt, expectedCount, image);
+    const quiz = await generateWithGemini(prompt, requestedCount, image);
     return { ...quiz, provider: 'gemini', status: 'success', cleanedText: structuredContent || cleanedContent, attempts: [...attempts, 'gemini_success'] };
   } catch (err: any) {
     attempts.push(`gemini_failed: ${err?.message || err}`);

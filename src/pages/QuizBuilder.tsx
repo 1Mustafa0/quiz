@@ -19,6 +19,8 @@ import { formatExtractedTextPreview } from '../utils/extractedText';
 const MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024;
 const MAX_IMAGE_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024;
 const IMAGE_GENERATION_PAYLOAD_LIMIT_BYTES = 3 * 1024 * 1024;
+const PDF_VISUAL_AUTO_QUESTIONS = 20;
+const PDF_BROWSER_OCR_MAX_PAGES = 12;
 const SUPPORT_AFTER_CREATE_KEY = 'ai-quiz-master-support-after-first-create';
 const ACCEPTED_FILE_TYPES = [
   '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.csv',
@@ -160,6 +162,137 @@ const extractPdfTextInBrowser = async (file: File) => {
   return pages.join('\n\n').trim();
 };
 
+const createPdfVisualPayloadForGemini = async (file: File) => {
+  const pdfjs = await import('pdfjs-dist/build/pdf.mjs');
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+    'pdfjs-dist/build/pdf.worker.min.mjs',
+    import.meta.url
+  ).toString();
+
+  const data = new Uint8Array(await file.arrayBuffer());
+  const pdf = await pdfjs.getDocument({ data }).promise;
+  const pageTargets = [12, 10, 8, 6, 4, 2, 1].filter(count => count <= pdf.numPages);
+  const widths = [1000, 850, 700, 560];
+  const qualities = [0.72, 0.6, 0.48, 0.36, 0.28];
+
+  for (const pageTarget of pageTargets) {
+    for (const targetWidth of widths) {
+      const renderedPages: HTMLCanvasElement[] = [];
+      try {
+        let totalHeight = 0;
+        let maxWidth = 0;
+
+        for (let pageNumber = 1; pageNumber <= pageTarget; pageNumber += 1) {
+          const page = await pdf.getPage(pageNumber);
+          const baseViewport = page.getViewport({ scale: 1 });
+          const scale = targetWidth / baseViewport.width;
+          const viewport = page.getViewport({ scale });
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.ceil(viewport.width);
+          canvas.height = Math.ceil(viewport.height);
+          const context = canvas.getContext('2d');
+          if (!context) throw new Error('Canvas is not available for PDF rendering.');
+          context.fillStyle = '#ffffff';
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          await page.render({ canvasContext: context, viewport }).promise;
+          renderedPages.push(canvas);
+          maxWidth = Math.max(maxWidth, canvas.width);
+          totalHeight += canvas.height + 36;
+        }
+
+        const sheet = document.createElement('canvas');
+        sheet.width = maxWidth;
+        sheet.height = totalHeight;
+        const sheetContext = sheet.getContext('2d');
+        if (!sheetContext) throw new Error('Canvas is not available for PDF rendering.');
+        sheetContext.fillStyle = '#ffffff';
+        sheetContext.fillRect(0, 0, sheet.width, sheet.height);
+        sheetContext.font = '20px Arial';
+        sheetContext.fillStyle = '#111827';
+
+        let offsetY = 0;
+        renderedPages.forEach((canvas, index) => {
+          sheetContext.fillText(`PDF page ${index + 1} of ${pdf.numPages}`, 12, offsetY + 24);
+          offsetY += 36;
+          sheetContext.drawImage(canvas, 0, offsetY);
+          offsetY += canvas.height;
+        });
+
+        for (const quality of qualities) {
+          const dataUrl = sheet.toDataURL('image/jpeg', quality);
+          const base64 = dataUrlToBase64(dataUrl);
+          if (base64.length * 0.75 <= IMAGE_GENERATION_PAYLOAD_LIMIT_BYTES) {
+            return {
+              data: base64,
+              mimeType: 'image/jpeg',
+              pageCount: pageTarget,
+              totalPages: pdf.numPages,
+            };
+          }
+        }
+      } finally {
+        renderedPages.forEach(canvas => {
+          canvas.width = 1;
+          canvas.height = 1;
+        });
+      }
+    }
+  }
+
+  throw new Error('Could not compress the scanned PDF pages enough for visual generation.');
+};
+
+const extractPdfOcrInBrowser = async (file: File) => {
+  const [{ createWorker }, pdfjs] = await Promise.all([
+    import('tesseract.js'),
+    import('pdfjs-dist/build/pdf.mjs'),
+  ]);
+
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+    'pdfjs-dist/build/pdf.worker.min.mjs',
+    import.meta.url
+  ).toString();
+
+  const data = new Uint8Array(await file.arrayBuffer());
+  const pdf = await pdfjs.getDocument({ data }).promise;
+  const pageLimit = Math.min(pdf.numPages, PDF_BROWSER_OCR_MAX_PAGES);
+  const worker = await createWorker('eng');
+  const pages: string[] = [];
+
+  try {
+    for (let pageNumber = 1; pageNumber <= pageLimit; pageNumber += 1) {
+      const page = await pdf.getPage(pageNumber);
+      const baseViewport = page.getViewport({ scale: 1 });
+      const scale = Math.min(2.2, Math.max(1.2, 1500 / baseViewport.width));
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      const context = canvas.getContext('2d');
+      if (!context) continue;
+      context.fillStyle = '#ffffff';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: context, viewport }).promise;
+
+      const result = await worker.recognize(canvas);
+      const pageText = result.data.text.replace(/\s+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+      if (pageText) pages.push(`Page ${pageNumber}:\n${pageText}`);
+
+      canvas.width = 1;
+      canvas.height = 1;
+    }
+  } finally {
+    await worker.terminate();
+  }
+
+  const text = pages.join('\n\n').trim();
+  return {
+    text,
+    pageCount: pageLimit,
+    totalPages: pdf.numPages,
+  };
+};
+
 const extractTextFileInBrowser = async (file: File) => {
   const text = await file.text();
   return text.trim();
@@ -200,6 +333,9 @@ const parseLargeFileInBrowser = async (file: File): Promise<{ text: string; extr
   };
 };
 
+const isPdfUpload = (file: File) =>
+  file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+
 interface ExtractionMeta {
   fileName: string;
   method: string;
@@ -212,6 +348,7 @@ const EXTRACTION_LABELS: Record<string, string> = {
   'pdf-parser': 'PDF text parser',
   'gemini-ocr-pdf': 'Gemini OCR for scanned PDF',
   'gemini-ocr-pdf-images': 'Gemini OCR for rendered PDF pages',
+  'browser-pdf-visual': 'Browser-rendered PDF pages',
   'gemini-ocr-image': 'Gemini OCR for image',
   'gemini-ocr-office-images': 'Gemini OCR for embedded Office images',
   'local-paddleocr-image': 'PaddleOCR for image',
@@ -1081,17 +1218,84 @@ const QuizBuilder: React.FC = () => {
         return;
       }
 
-      let parsed: { text: string; extraction?: any };
+      let parsed: { text: string; extraction?: any } | null = null;
       try {
         parsed = await parseFileOnServer(file);
       } catch (parseErr) {
         const message = parseErr instanceof Error ? parseErr.message : String(parseErr);
-        const canFallbackToBrowser = /payload|function|server returned html|backend|api route|missing|crashed/i.test(message);
+        const canFallbackToBrowser = /payload|too large|413|function|server returned html|backend|api route|missing|crashed/i.test(message);
         if (!canFallbackToBrowser) {
           throw parseErr;
         }
 
-        parsed = await parseLargeFileInBrowser(file);
+        try {
+          parsed = await parseLargeFileInBrowser(file);
+        } catch (browserParseErr) {
+          if (!isPdfUpload(file)) {
+            throw browserParseErr;
+          }
+
+          try {
+            const browserOcr = await extractPdfOcrInBrowser(file);
+            if (browserOcr.text.length >= 80) {
+              parsed = {
+                text: browserOcr.text,
+                extraction: {
+                  method: 'browser-tesseract-pdf',
+                  usedOcr: true,
+                  length: browserOcr.text.length,
+                  returnedLength: browserOcr.text.length,
+                  originalName: file.name,
+                  mimeType: file.type,
+                  diagnostics: {
+                    ocrPdfPages: browserOcr.pageCount,
+                    renderedPdfPages: browserOcr.totalPages,
+                  },
+                },
+              };
+            }
+          } catch (ocrErr) {
+            console.warn('[QuizBuilder] browser PDF OCR failed, falling back to visual input:', ocrErr);
+          }
+
+          if (parsed) {
+            // Continue with the normal text-generation flow below.
+          } else {
+          const pdfVisualPayload = await createPdfVisualPayloadForGemini(file);
+          setExtractedText('');
+          setExtractedMeta({
+            fileName: file.name,
+            method: 'browser-pdf-visual',
+            usedOcr: true,
+            length: 0,
+            returnedLength: 0,
+          });
+          setShowExtractedText(false);
+
+          const visualNotes = [
+            `The uploaded PDF appears to be scanned or image-only. It was rendered in the browser as ${pdfVisualPayload.pageCount} visible page image(s) out of ${pdfVisualPayload.totalPages}. Read the visible educational content carefully and generate questions that cover every distinct visible knowledge point.`,
+            notes.trim(),
+          ].filter(Boolean).join('\n') || undefined;
+
+          const generated = await generateQuizOnServer({
+            image: {
+              data: pdfVisualPayload.data,
+              mimeType: pdfVisualPayload.mimeType,
+            },
+            numQuestions: autoQuestions ? PDF_VISUAL_AUTO_QUESTIONS : numQuestions,
+            language: 'detect',
+            difficulty,
+            notes: visualNotes,
+          });
+
+          setLastGenerationMeta(generated);
+          setTitle(generated.title);
+          setDescription(generated.description);
+          setQuestions(generated.questions);
+          await autoSaveAndPlay(generated);
+          return;
+          }
+        }
       }
 
       await generateQuizFromExtractedText(file, parsed.text, parsed.extraction);

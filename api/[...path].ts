@@ -20,9 +20,10 @@ const pdfParser = typeof pdf === 'function' ? pdf : pdf.default;
 const mammoth = (mammothImport as any).default || mammothImport;
 const officeParser = (officeParserImport as any).default || officeParserImport;
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const MAX_QUIZ_TEXT_CHARS = Number(process.env.QUIZ_MAX_TEXT_CHARS || 12000);
-const MAX_SERVERLESS_QUESTIONS = Number(process.env.QUIZ_MAX_QUESTIONS || 10);
+const MAX_QUIZ_TEXT_CHARS = Number(process.env.QUIZ_MAX_TEXT_CHARS || 50000);
+const MAX_SERVERLESS_QUESTIONS = Number(process.env.QUIZ_MAX_QUESTIONS || 30);
 const GROQ_TIMEOUT_MS = Number(process.env.GROQ_TIMEOUT_MS || 30000);
+const GROQ_MAX_TOKENS = Number(process.env.GROQ_MAX_TOKENS || 9000);
 const GROQ_MODELS = Array.from(new Set([
   'llama-3.1-8b-instant',
   ...(process.env.GROQ_MODELS || '').split(',').map(model => model.trim()).filter(Boolean),
@@ -323,9 +324,57 @@ const structureLessonContent = (text: string) => {
 const recommendQuestionCount = (characterLength: number) => {
   const length = Math.max(0, Math.floor(Number(characterLength) || 0));
   if (length < 1200) return 3;
-  if (length < 3000) return 5;
-  if (length < 6500) return Math.min(7, MAX_SERVERLESS_QUESTIONS);
-  return Math.min(8, MAX_SERVERLESS_QUESTIONS);
+  if (length < 2500) return Math.min(6, MAX_SERVERLESS_QUESTIONS);
+  if (length < 5000) return Math.min(10, MAX_SERVERLESS_QUESTIONS);
+  if (length < 9000) return Math.min(15, MAX_SERVERLESS_QUESTIONS);
+  if (length < 15000) return Math.min(20, MAX_SERVERLESS_QUESTIONS);
+  if (length < 25000) return Math.min(25, MAX_SERVERLESS_QUESTIONS);
+  return MAX_SERVERLESS_QUESTIONS;
+};
+
+const estimateKnowledgePointCount = (text: string) => {
+  const cleanText = String(text || '').replace(/\r\n?/g, '\n').trim();
+  if (!cleanText) return 0;
+
+  const lines = cleanText
+    .split('\n')
+    .map(line => line.replace(/[ \t\f\v]+/g, ' ').trim())
+    .filter(Boolean);
+
+  const meaningfulLines = lines.filter(line => {
+    const words = line.match(/[\p{L}\p{N}%+/<>=-]+/gu) || [];
+    return words.length >= 3 && line.length >= 12;
+  });
+
+  const bulletOrNumberedLines = meaningfulLines.filter(line =>
+    /^[-+*â€¢â—â—‹â–ªâ–«]\s+/.test(line) ||
+    /^\d{1,3}\s*[\).:\-]\s+/.test(line) ||
+    /^[A-D]\s*[\).:\-]\s+/i.test(line)
+  ).length;
+
+  const headingLines = meaningfulLines.filter((line, index) =>
+    isLikelyLessonHeading(line, meaningfulLines[index + 1] || '')
+  ).length;
+
+  const factSentences = cleanText
+    .split(/[.!?ØŸ]\s+|\n+/)
+    .map(sentence => sentence.trim())
+    .filter(sentence => {
+      const words = sentence.match(/[\p{L}\p{N}%+/<>=-]+/gu) || [];
+      return words.length >= 6 && sentence.length >= 25;
+    }).length;
+
+  const denseFacts = meaningfulLines.filter(line =>
+    /(?:\d+\s*%|\d+\s*(?:ml|mg|kg|hr|hour|hours|day|days|week|weeks|cm|mm|l)\b|formula|classification|degree|rule|signs?|symptoms?|causes?|treatment|management|first aid|fluid|pain|infection|wound|burn|ØªØµÙ†ÙŠÙ|Ø¹Ù„Ø§Ø¬|Ø£Ø³Ø¨Ø§Ø¨|Ø£Ø¹Ø±Ø§Ø¶|Ø¯Ø±Ø¬Ø©|Ø¥Ø³Ø¹Ø§Ù)/i.test(line)
+  ).length;
+
+  const rawEstimate = Math.max(
+    recommendQuestionCount(cleanText.length),
+    headingLines + Math.ceil((bulletOrNumberedLines + denseFacts) * 0.75),
+    Math.ceil(factSentences * 0.55)
+  );
+
+  return Math.max(3, Math.min(MAX_SERVERLESS_QUESTIONS, rawEstimate));
 };
 
 const normalizeQuiz = (value: any, expectedCount: number) => {
@@ -454,7 +503,7 @@ const callGroqModel = async (prompt: string, model: string) => {
       body: JSON.stringify({
         model,
         temperature: 0.15,
-        max_tokens: 2600,
+        max_tokens: GROQ_MAX_TOKENS,
         response_format: { type: 'json_object' },
         messages: [
           {
@@ -596,9 +645,16 @@ const generateQuizFromContent = async (params: any) => {
   }
   const structuredContent = structureLessonContent(cleanedContent);
 
-  const requestedCount = expectedCount > 0 ? expectedCount : recommendQuestionCount(cleanedContent.length);
+  const requestedCount = expectedCount > 0
+    ? expectedCount
+    : params.image && !cleanedContent
+      ? Math.min(5, MAX_SERVERLESS_QUESTIONS)
+      : estimateKnowledgePointCount(structuredContent || cleanedContent);
   const prompt = `Generate exactly ${requestedCount} multiple-choice questions from the lesson content.
 Use only the content. Cover different lesson headings. Same language as the content.
+This count is mandatory for automatic mode too: it is based on distinct knowledge points, not a fixed default and not only text length.
+Before writing questions, internally identify all testable knowledge points: definitions, causes, classifications, degrees, percentages, formulas, treatment steps, first-aid steps, risks, complications, signs/symptoms, contraindications, and nursing actions.
+Cover as many distinct knowledge points as possible, ideally one question per important knowledge point until the requested count is reached. Do not stop after 5 questions if the lesson has more information.
 If the content is Arabic or mostly Arabic, write natural Arabic suitable for Egyptian/Arab students and keep text RTL-friendly.
 Bloom mapping: easy = remember/understand, medium = analyze, hard = apply/analyze. Set bloom_level to one of remember, understand, apply, analyze.
 Each question must have 4 options A-D, one correct_option, and a detailed explanation.
@@ -617,7 +673,7 @@ ${(structuredContent || cleanedContent || '[Image attached]').slice(0, MAX_QUIZ_
 
   if (!params.image) {
     try {
-      const quiz = await generateWithGroq(prompt, expectedCount);
+      const quiz = await generateWithGroq(prompt, requestedCount);
       return { ...quiz, provider: 'groq', status: 'success', cleanedText: structuredContent || cleanedContent, attempts: ['groq_success'] };
     } catch (error: any) {
       attempts.push(`groq_failed: ${error?.message || error}`);
@@ -626,7 +682,7 @@ ${(structuredContent || cleanedContent || '[Image attached]').slice(0, MAX_QUIZ_
   }
 
   try {
-    const quiz = await generateWithGemini(prompt, expectedCount, params.image);
+    const quiz = await generateWithGemini(prompt, requestedCount, params.image);
     return { ...quiz, provider: 'gemini', status: 'success', cleanedText: structuredContent || cleanedContent, attempts: [...attempts, 'gemini_success'] };
   } catch (error: any) {
     attempts.push(`gemini_failed: ${error?.message || error}`);
