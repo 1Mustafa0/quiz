@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { db } from '../firebase';
-import { collection, deleteDoc, doc, getDocs, setDoc, updateDoc, Timestamp } from 'firebase/firestore';
-import { Users, BookOpen, Trash2, Shield, ShieldAlert, Search, Mail, TrendingUp, UserPlus, Eye, UserCheck, RefreshCw, Globe, X, Clock, Check } from 'lucide-react';
+import { collection, deleteDoc, doc, getDocs, limit, orderBy, query as firestoreQuery, setDoc, updateDoc, Timestamp } from 'firebase/firestore';
+import { Users, BookOpen, Trash2, Shield, ShieldAlert, Search, Mail, TrendingUp, UserPlus, Eye, UserCheck, RefreshCw, Globe, X, Clock, Check, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence, type Variants } from 'motion/react';
 import { useAuth } from '../AuthContext';
 import { Navigate, Link } from 'react-router-dom';
@@ -34,6 +34,23 @@ interface VisitorDoc {
   uid?: string;
 }
 
+interface OwnerAiReport {
+  id: string;
+  source: string;
+  operation: string;
+  severity: 'info' | 'warning' | 'error' | 'critical';
+  message: string;
+  aiSummary?: string;
+  url?: string;
+  status?: string;
+  createdAt?: any;
+  clientTime?: string;
+  user?: {
+    uid?: string;
+    email?: string | null;
+  };
+}
+
 interface Stats {
   totalUsers: number;
   newUsersToday: number;
@@ -53,9 +70,10 @@ const startOfWeek = () => {
   return Timestamp.fromDate(d);
 };
 
-function toMs(ts: Timestamp | number | null | undefined): number | null {
+function toMs(ts: Timestamp | number | string | null | undefined): number | null {
   if (!ts) return null;
   if (typeof ts === 'number') return ts;
+  if (typeof ts === 'string') return new Date(ts).getTime() || null;
   if (typeof (ts as Timestamp).seconds === 'number') return (ts as Timestamp).seconds * 1000;
   return null;
 }
@@ -107,13 +125,14 @@ const AdminDashboard: React.FC = () => {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const [visitors, setVisitors] = useState<VisitorDoc[]>([]);
+  const [ownerAiReports, setOwnerAiReports] = useState<OwnerAiReport[]>([]);
   const [stats, setStats] = useState<Stats>({
     totalUsers: 0, newUsersToday: 0, newUsersWeek: 0,
     totalVisitors: 0, newVisitorsToday: 0, activeToday: 0, registeredVisitors: 0,
   });
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeTab, setActiveTab] = useState<'users' | 'quizzes' | 'visitors'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'quizzes' | 'visitors' | 'ownerAi'>('users');
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
   const [newEmail, setNewEmail] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
@@ -218,6 +237,37 @@ const AdminDashboard: React.FC = () => {
     }
   }, []);
 
+  const fetchOwnerAiReports = React.useCallback(async () => {
+    try {
+      const reportsQuery = firestoreQuery(
+        collection(db, 'owner_ai_reports'),
+        orderBy('createdAt', 'desc'),
+        limit(50),
+      );
+      const snapshot = await getDocs(reportsQuery);
+      const list: OwnerAiReport[] = snapshot.docs.map((reportDoc) => {
+        const data = reportDoc.data();
+        return {
+          id: reportDoc.id,
+          source: safeText(data.source, 'unknown'),
+          operation: safeText(data.operation, 'unknown'),
+          severity: (safeText(data.severity, 'error') as OwnerAiReport['severity']),
+          message: safeText(data.message),
+          aiSummary: safeText(data.aiSummary),
+          url: safeText(data.url),
+          status: safeText(data.status, 'new'),
+          createdAt: data.createdAt || data.clientTime || null,
+          clientTime: safeText(data.clientTime),
+          user: data.user || undefined,
+        };
+      });
+      setOwnerAiReports(list);
+    } catch (e: any) {
+      console.error('[admin] fetchOwnerAiReports error:', e.message);
+      setAdminError('Could not load Owner AI reports.');
+    }
+  }, []);
+
   useEffect(() => {
     if (role !== 'admin') return;
     let isMounted = true;
@@ -225,7 +275,7 @@ const AdminDashboard: React.FC = () => {
     // Initial fetch for all three data sources
     const loadAll = async () => {
       setLoading(true);
-      await Promise.all([fetchUsers(), fetchQuizzes(), fetchVisitors()]);
+      await Promise.all([fetchUsers(), fetchQuizzes(), fetchVisitors(), fetchOwnerAiReports()]);
       if (isMounted) {
         setLastUpdated(new Date());
         setLoading(false);
@@ -235,7 +285,7 @@ const AdminDashboard: React.FC = () => {
 
     // Poll every 30s
     const interval = setInterval(() => {
-      Promise.all([fetchUsers(), fetchQuizzes(), fetchVisitors()]).then(() => {
+      Promise.all([fetchUsers(), fetchQuizzes(), fetchVisitors(), fetchOwnerAiReports()]).then(() => {
         if (isMounted) setLastUpdated(new Date());
       });
     }, 30000);
@@ -244,7 +294,7 @@ const AdminDashboard: React.FC = () => {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [role, fetchUsers, fetchQuizzes, fetchVisitors]);
+  }, [role, fetchUsers, fetchQuizzes, fetchVisitors, fetchOwnerAiReports]);
 
   if (authLoading) {
     return (
@@ -383,6 +433,14 @@ const AdminDashboard: React.FC = () => {
     )
     .sort((a, b) => (toMs(b.lastVisit) || 0) - (toMs(a.lastVisit) || 0));
 
+  const filteredOwnerAiReports = ownerAiReports.filter(report =>
+    safeLower(report.source).includes(query) ||
+    safeLower(report.operation).includes(query) ||
+    safeLower(report.message).includes(query) ||
+    safeLower(report.aiSummary).includes(query) ||
+    safeLower(report.user?.email).includes(query)
+  );
+
   const renderQuizCategory = (category: string, compact = false) => {
     const normalized = normalizeCategory(category);
     if (!normalized) {
@@ -412,12 +470,13 @@ const AdminDashboard: React.FC = () => {
     { key: 'users' as const, label: `المستخدمون`, count: users.length, icon: Users },
     { key: 'quizzes' as const, label: `الكويزات`, count: quizzes.length, icon: BookOpen },
     { key: 'visitors' as const, label: `الزوار`, count: visitors.length, icon: Eye },
+    { key: 'ownerAi' as const, label: 'Owner AI', count: ownerAiReports.length, icon: AlertTriangle },
   ];
 
   const handleRefreshAll = async () => {
     setIsRefreshing(true);
     try {
-      await Promise.all([fetchUsers(), fetchQuizzes(), fetchVisitors()]);
+      await Promise.all([fetchUsers(), fetchQuizzes(), fetchVisitors(), fetchOwnerAiReports()]);
       setLastUpdated(new Date());
     } finally {
       setIsRefreshing(false);
@@ -955,6 +1014,60 @@ const AdminDashboard: React.FC = () => {
                     ))}
                   </div>
                 </>
+              )}
+            </motion.div>
+          )}
+
+          {activeTab === 'ownerAi' && (
+            <motion.div key="owner-ai-table" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
+              {filteredOwnerAiReports.length === 0 ? (
+                <div className="px-6 py-12 text-center space-y-3">
+                  <div className="w-14 h-14 bg-green-50 dark:bg-green-900/20 text-green-500 rounded-2xl flex items-center justify-center mx-auto">
+                    <Check className="w-7 h-7" />
+                  </div>
+                  <p className="text-gray-500 dark:text-slate-400">No Owner AI reports yet.</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-gray-100 dark:divide-slate-700">
+                  {filteredOwnerAiReports.map((report) => {
+                    const severityClass = report.severity === 'critical'
+                      ? 'bg-red-50 text-red-700 dark:bg-red-900/25 dark:text-red-300'
+                      : report.severity === 'warning'
+                        ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/25 dark:text-amber-300'
+                        : 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200';
+
+                    return (
+                      <div key={report.id} className="p-5 space-y-3">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                          <div className="space-y-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${severityClass}`}>
+                                {report.severity}
+                              </span>
+                              <span className="text-xs font-mono text-gray-500 dark:text-slate-400">{report.source}</span>
+                              <span className="text-xs font-semibold text-gray-700 dark:text-slate-300">{report.operation}</span>
+                            </div>
+                            <p className="font-semibold text-gray-900 dark:text-white" dir="auto">{report.message}</p>
+                            {report.aiSummary && (
+                              <p className="max-w-4xl whitespace-pre-line text-sm text-gray-600 dark:text-slate-300" dir="auto">
+                                {report.aiSummary}
+                              </p>
+                            )}
+                          </div>
+                          <div className="text-xs text-gray-500 dark:text-slate-400 md:text-right">
+                            <div>{formatDate(report.createdAt || report.clientTime)}</div>
+                            <div className="font-mono">{report.user?.email || shortId(report.user?.uid, 18) || 'anonymous'}</div>
+                          </div>
+                        </div>
+                        {report.url && (
+                          <div className="truncate text-xs text-indigo-600 dark:text-indigo-400" title={report.url}>
+                            {report.url}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </motion.div>
           )}

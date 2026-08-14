@@ -5,7 +5,10 @@ import { AuthProvider } from './AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { LanguageProvider } from './contexts/LanguageContext';
 import ErrorBoundary from './components/ErrorBoundary';
+import { installOwnerAiGlobalMonitor } from './utils/ownerAiMonitor';
 import './index.css';
+
+installOwnerAiGlobalMonitor();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

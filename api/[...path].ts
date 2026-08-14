@@ -138,6 +138,96 @@ const getGeminiKeys = () => {
   ));
 };
 
+const OWNER_ALERT_WEBHOOK_URL = process.env.OWNER_ALERT_WEBHOOK_URL?.trim();
+
+const safeStringify = (value: unknown, limit = 6000) => {
+  try {
+    const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+    return text.length > limit ? `${text.slice(0, limit)}...` : text;
+  } catch {
+    return String(value).slice(0, limit);
+  }
+};
+
+const buildFallbackOwnerSummary = (report: any) => [
+  `Operation: ${report?.operation || 'unknown'}`,
+  `Source: ${report?.source || 'unknown'}`,
+  `Severity: ${report?.severity || 'error'}`,
+  `Message: ${report?.message || 'No message provided'}`,
+  `URL: ${report?.url || 'unknown'}`,
+].join('\n');
+
+const summarizeFailureForOwner = async (report: any) => {
+  const keys = getGeminiKeys();
+  if (keys.length === 0) return buildFallbackOwnerSummary(report);
+
+  const prompt = `
+You are the private site-owner monitoring assistant.
+Create a concise Arabic incident report for the website owner.
+Include:
+- short title
+- what failed
+- likely cause
+- user impact
+- recommended next action
+- raw technical clue
+
+Incident JSON:
+${safeStringify(report)}
+`;
+
+  try {
+    const ai = new GoogleGenAI({ apiKey: keys[0] });
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: [{ parts: [{ text: prompt }] }],
+      config: {
+        systemInstruction: 'Return only a concise Arabic owner incident report. Do not expose secrets or invent unavailable facts.',
+      },
+    });
+    return response.text?.trim() || buildFallbackOwnerSummary(report);
+  } catch (error: any) {
+    console.warn('[owner-ai] summary failed:', error?.message || error);
+    return buildFallbackOwnerSummary(report);
+  }
+};
+
+const sendOwnerWebhook = async (report: any, aiSummary: string) => {
+  if (!OWNER_ALERT_WEBHOOK_URL) return false;
+
+  const text = [
+    'Owner AI failure report',
+    aiSummary,
+    '',
+    `Severity: ${report?.severity || 'error'}`,
+    `URL: ${report?.url || 'unknown'}`,
+    `User: ${report?.user?.email || report?.user?.uid || 'anonymous'}`,
+  ].join('\n');
+
+  try {
+    const response = await fetch(OWNER_ALERT_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text,
+        content: text,
+        report,
+        aiSummary,
+      }),
+    });
+    return response.ok;
+  } catch (error: any) {
+    console.warn('[owner-ai] webhook failed:', error?.message || error);
+    return false;
+  }
+};
+
+const notifyOwnerAi = async (report: any) => {
+  const aiSummary = await summarizeFailureForOwner(report);
+  const webhookSent = await sendOwnerWebhook(report, aiSummary);
+  return { aiSummary, webhookSent };
+};
+
 const isQuotaError = (error: any) => {
   const message = `${error?.message || ''} ${error?.status || ''} ${error?.code || ''}`;
   return error?.status === 429 ||
@@ -773,7 +863,29 @@ app.get('/api/health', (_req, res) => {
     message: 'Serverless API is running',
     hasGeminiKey: Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEYS),
     hasGroqKey: Boolean(process.env.GROQ_API_KEY),
+    hasOwnerAlertWebhook: Boolean(OWNER_ALERT_WEBHOOK_URL),
   });
+});
+
+app.post('/api/owner-ai/report-failure', express.json({ limit: '256kb' }), async (req: any, res: any) => {
+  try {
+    const report = req.body || {};
+    if (!report.message || !report.operation) {
+      return res.status(400).json({ error: 'message and operation are required' });
+    }
+
+    const result = await notifyOwnerAi({
+      ...report,
+      receivedAt: new Date().toISOString(),
+      source: report.source || 'client',
+      severity: report.severity || 'error',
+    });
+
+    res.json({ ok: true, ...result });
+  } catch (error: any) {
+    console.error('[owner-ai/report-failure]', error);
+    res.status(500).json({ error: 'Failed to process owner AI report' });
+  }
 });
 
 app.post('/api/generate-quiz', express.json({ limit: '12mb' }), async (req: any, res: any) => {
@@ -795,6 +907,22 @@ app.post('/api/generate-quiz', express.json({ limit: '12mb' }), async (req: any,
   } catch (error: any) {
     console.error('[api/generate-quiz]', error);
     const status = Number(error?.statusCode) || (/json|schema|invalid/i.test(error?.message || '') ? 502 : 500);
+    void notifyOwnerAi({
+      source: 'api',
+      operation: 'generate-quiz',
+      severity: status >= 500 ? 'critical' : 'warning',
+      message: error?.message || 'Failed to generate quiz',
+      details: {
+        status,
+        code: error?.code,
+        attempts: error?.attempts,
+        hasContent: Boolean(req.body?.content),
+        hasImage: Boolean(req.body?.image),
+        requestedQuestions: req.body?.numQuestions,
+      },
+      url: req.headers?.referer || req.url,
+      userAgent: req.headers?.['user-agent'],
+    });
     res.status(status).json({
       error: error?.message || 'Failed to generate quiz',
       code: error?.code || (status === 502 ? 'AI_RESPONSE_INVALID' : 'QUIZ_GENERATION_FAILED'),
@@ -870,6 +998,19 @@ app.post('/api/parse-file', upload.single('file'), async (req: any, res: any) =>
     });
   } catch (error: any) {
     console.error('[api/parse-file]', error);
+    void notifyOwnerAi({
+      source: 'api',
+      operation: 'parse-file',
+      severity: 'critical',
+      message: error?.message || 'Failed to parse file',
+      details: {
+        fileName: req.file?.originalname,
+        mimeType: req.file?.mimetype,
+        size: req.file?.size,
+      },
+      url: req.headers?.referer || req.url,
+      userAgent: req.headers?.['user-agent'],
+    });
     res.status(500).json({
       error: 'Failed to parse file',
       details: error?.message || 'حدث خطأ أثناء معالجة الملف. حاول مرة أخرى لاحقًا.',

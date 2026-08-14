@@ -165,5 +165,16 @@ service cloud.firestore {
       allow read, delete: if isAuthenticated() && isAdmin();
     }
 
+    // Owner AI monitoring reports
+    match /owner_ai_reports/{reportId} {
+      allow create: if request.resource.data.keys().hasAll(['source', 'operation', 'message', 'severity', 'createdAt']) &&
+                    request.resource.data.source is string &&
+                    request.resource.data.operation is string &&
+                    request.resource.data.message is string &&
+                    request.resource.data.severity in ['info', 'warning', 'error', 'critical'] &&
+                    request.resource.data.createdAt is timestamp;
+      allow read, update, delete: if isAuthenticated() && isAdmin();
+    }
+
   }
 }

@@ -1,6 +1,7 @@
 import { getFirestore } from 'firebase/firestore';
 import { app, firebaseConfig } from './firebaseApp';
 import { auth, loginWithGoogle, logout } from './firebaseAuth';
+import { reportOwnerAiFailure } from './utils/ownerAiMonitor';
 
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export { auth, loginWithGoogle, logout };
@@ -54,5 +55,12 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     path,
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
+  void reportOwnerAiFailure({
+    source: 'firestore',
+    operation: operationType,
+    severity: 'error',
+    message: errInfo.error,
+    details: errInfo,
+  });
   throw new Error(JSON.stringify(errInfo));
 }

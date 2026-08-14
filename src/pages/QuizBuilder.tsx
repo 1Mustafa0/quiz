@@ -15,6 +15,7 @@ import { ownerOnlyError } from '../utils/owner';
 import { exportQuizToPdf, getPdfQuestionAnswer, getPdfQuestionOptions, preloadQuizPdfExporter } from '../utils/quizPdf';
 import { normalizeCategory } from '../utils/categories';
 import { formatExtractedTextPreview } from '../utils/extractedText';
+import { getBrowserExtractionStrategy } from '../utils/browserFileParsing';
 
 const MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024;
 const MAX_IMAGE_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024;
@@ -299,21 +300,20 @@ const extractTextFileInBrowser = async (file: File) => {
 };
 
 const parseLargeFileInBrowser = async (file: File): Promise<{ text: string; extraction?: any }> => {
-  const lowerName = file.name.toLowerCase();
+  const strategy = getBrowserExtractionStrategy(file);
   let text = '';
   let method = 'browser-text';
 
-  if (file.type === 'application/pdf' || lowerName.endsWith('.pdf')) {
+  if (strategy === 'pdf') {
     text = await extractPdfTextInBrowser(file);
     method = 'browser-pdfjs';
-  } else if (
-    file.type.startsWith('text/') ||
-    /\.(txt|md|json|csv|js|ts|tsx|jsx|py|java|cpp|c|html|css)$/i.test(lowerName)
-  ) {
+  } else if (strategy === 'text') {
     text = await extractTextFileInBrowser(file);
     method = 'browser-text';
+  } else if (strategy === 'docx' || strategy === 'pptx' || strategy === 'xlsx') {
+    throw new Error('لا يمكن قراءة هذا المستند مباشرة داخل المتصفح. جرّب رفع ملف نصي أو انسخ محتواه داخل خانة النص ثم حاول مرة أخرى.');
   } else {
-    throw new Error('الملف كبير على نسخة Vercel الحالية. جرّب PDF يحتوي على نص قابل للنسخ، أو انسخ النص داخل خانة النص.');
+    throw new Error('هذا النوع من الملفات غير مدعوم في الوضع الحالي. جرّب ملفاً نصياً أو صورة أوضح، أو انسخ النص داخل خانة النص.');
   }
 
   if (!text || text.length < 10) {
@@ -1223,7 +1223,7 @@ const QuizBuilder: React.FC = () => {
         parsed = await parseFileOnServer(file);
       } catch (parseErr) {
         const message = parseErr instanceof Error ? parseErr.message : String(parseErr);
-        const canFallbackToBrowser = /payload|too large|413|function|server returned html|backend|api route|missing|crashed/i.test(message);
+        const canFallbackToBrowser = /payload|too large|413|function|server returned html|backend|api route|missing|crashed|extract meaningful text|Could not extract|parse-file/i.test(message);
         if (!canFallbackToBrowser) {
           throw parseErr;
         }

@@ -3,6 +3,7 @@ import { AlertCircle, RotateCcw, Home } from 'lucide-react';
 import { motion } from 'motion/react';
 import { auth } from '../firebaseAuth';
 import { isOwnerUser } from '../utils/owner';
+import { reportOwnerAiFailure } from '../utils/ownerAiMonitor';
 
 interface Props {
   children: React.ReactNode;
@@ -31,11 +32,14 @@ class ErrorBoundary extends React.Component<Props, State> {
     // Track error count for analytics
     this.setState(prev => ({ errorCount: prev.errorCount + 1 }));
     
-    // Log to external service in production
-    if (process.env.NODE_ENV === 'production') {
-      // Send error to monitoring service
-      console.error('Error Info:', errorInfo.componentStack);
-    }
+    void reportOwnerAiFailure({
+      source: 'react',
+      operation: 'error-boundary',
+      severity: 'critical',
+      message: error.message,
+      stack: error.stack,
+      details: { componentStack: errorInfo.componentStack },
+    });
   }
 
   componentDidUpdate(prevProps: Props) {

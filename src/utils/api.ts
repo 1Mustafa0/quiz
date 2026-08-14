@@ -1,3 +1,5 @@
+import { reportOwnerAiFailure } from './ownerAiMonitor';
+
 /**
  * API utility functions with error handling and retry logic
  */
@@ -97,6 +99,13 @@ export async function apiCall<T = any>(
     });
 
     if (!response.ok) {
+      void reportOwnerAiFailure({
+        source: 'api-client',
+        operation: `${options.method || 'GET'} ${url}`,
+        severity: response.status >= 500 ? 'critical' : 'warning',
+        message: `API request failed with ${response.status}: ${response.statusText}`,
+        details: { status: response.status, statusText: response.statusText },
+      });
       return {
         data: null,
         error: `خطأ ${response.status}: ${response.statusText}`,
@@ -113,6 +122,13 @@ export async function apiCall<T = any>(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'حدث خطأ غير متوقع';
+    void reportOwnerAiFailure({
+      source: 'api-client',
+      operation: `${options.method || 'GET'} ${url}`,
+      severity: 'critical',
+      message,
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     return {
       data: null,
       error: message,
