@@ -1,4 +1,10 @@
 const getAllApiKeys = (): string[] => {
+  // Security rule: do not read secrets from the browser bundle.
+  // Secret keys must be used only in server-side code and loaded from .env.local / server environment.
+  if (typeof window !== 'undefined' || typeof document !== 'undefined') {
+    return [];
+  }
+
   const keys: string[] = [];
   const invalid = new Set(['', 'MY_GEMINI_API_KEY', 'undefined', 'null']);
 
@@ -11,25 +17,20 @@ const getAllApiKeys = (): string[] => {
     return (process as any).env?.[name];
   };
 
-  // Primary keys (multiple accepted names)
-  addKey((import.meta as any).env?.VITE_GEMINI_API_KEY || readProcessEnv('GEMINI_API_KEY'));
-  addKey((import.meta as any).env?.VITE_GOOGLE_API_KEY || readProcessEnv('GOOGLE_API_KEY'));
+  // Keys must be read in backend/server only.
+  addKey(readProcessEnv('GEMINI_API_KEY'));
+  addKey(readProcessEnv('GOOGLE_API_KEY'));
 
-  // Indexed keys: GEMINI_API_KEY_1 ... GEMINI_API_KEY_10
   for (let i = 1; i <= 10; i++) {
-    addKey(
-      (import.meta as any).env?.[`VITE_GEMINI_API_KEY_${i}`] || readProcessEnv(`GEMINI_API_KEY_${i}`)
-    );
+    addKey(readProcessEnv(`GEMINI_API_KEY_${i}`));
   }
 
-  // Comma-separated list
-  const multi = (import.meta as any).env?.VITE_GEMINI_API_KEYS || readProcessEnv('GEMINI_API_KEYS') || '';
+  const multi = readProcessEnv('GEMINI_API_KEYS') || '';
   if (multi) {
     multi.split(',').forEach((k: string) => addKey(k.trim()));
   }
 
-  // Numeric-named secrets collected by Vite config.
-  const numericMulti = (import.meta as any).env?.VITE_NUMERIC_SECRET_KEYS || readProcessEnv('NUMERIC_SECRET_KEYS') || '';
+  const numericMulti = readProcessEnv('NUMERIC_SECRET_KEYS') || '';
   if (numericMulti) {
     numericMulti.split(',').forEach((k: string) => addKey(k.trim()));
   }
